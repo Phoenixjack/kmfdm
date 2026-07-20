@@ -98,5 +98,14 @@ def matching_symbol_library_for_footprint(footprint_library: Path | str) -> Path
     if footprint_path.suffix != ".pretty":
         return None
 
-    symbol_path = footprint_path.with_suffix(".kicad_sym")
-    return symbol_path if symbol_path.is_file() else None
+    exact_name = f"{footprint_path.stem}.kicad_sym"
+    candidate_paths = [
+        footprint_path / exact_name,
+        footprint_path.with_suffix(".kicad_sym"),
+    ]
+
+    for symbol_path in candidate_paths:
+        if symbol_path.is_file():
+            return symbol_path
+
+    return None

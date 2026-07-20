@@ -28,6 +28,8 @@ Initial fields:
 
 `kia_interop` is reserved for future KiCad Import Assistant compatibility. It should leave room for copying or mapping compatible KIA private-data values such as library root, path variable, import destinations, schema profiles, and API provider settings without forcing KMFDM to share KIA's exact file format.
 
+When a footprint library is added, KMFDM looks for an exact matching symbol library in the `.pretty` folder first, then beside it. For example, `_testCONN.pretty` can auto-add `_testCONN.pretty/_testCONN.kicad_sym` or `_testCONN.kicad_sym`.
+
 ## Policy Concepts
 
 Policies may define:

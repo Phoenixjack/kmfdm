@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed footprint-library symbol autodetection for layouts where the matching `.kicad_sym` file lives inside the `.pretty` folder.
 - Reserved a `kia_interop` workspace config section for future KIA/KMFDM config mapping.
 - Moved the footprint-library section above the symbol-library section in the Configuration dialog.
 - Added exact sibling symbol-library detection when adding a footprint library.

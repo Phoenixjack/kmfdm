@@ -55,6 +55,26 @@ def test_matching_symbol_library_for_footprint_finds_sibling_match(tmp_path) -> 
     assert matching_symbol_library_for_footprint(footprint_library) == symbol_library
 
 
+def test_matching_symbol_library_for_footprint_finds_contained_match(tmp_path) -> None:
+    footprint_library = tmp_path / "Connectors.pretty"
+    symbol_library = footprint_library / "Connectors.kicad_sym"
+    footprint_library.mkdir()
+    symbol_library.write_text("(kicad_symbol_lib)\n", encoding="utf-8")
+
+    assert matching_symbol_library_for_footprint(footprint_library) == symbol_library
+
+
+def test_matching_symbol_library_for_footprint_prefers_contained_match(tmp_path) -> None:
+    footprint_library = tmp_path / "Connectors.pretty"
+    contained_symbol_library = footprint_library / "Connectors.kicad_sym"
+    sibling_symbol_library = tmp_path / "Connectors.kicad_sym"
+    footprint_library.mkdir()
+    contained_symbol_library.write_text("(kicad_symbol_lib)\n", encoding="utf-8")
+    sibling_symbol_library.write_text("(kicad_symbol_lib)\n", encoding="utf-8")
+
+    assert matching_symbol_library_for_footprint(footprint_library) == contained_symbol_library
+
+
 def test_matching_symbol_library_for_footprint_requires_exact_sibling_match(tmp_path) -> None:
     footprint_library = tmp_path / "Connectors.pretty"
     near_miss = tmp_path / "Connector.kicad_sym"
