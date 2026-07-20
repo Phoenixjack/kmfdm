@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kmfdm.config import LibrarySelection, WorkspaceConfig, load_workspace_config, save_workspace_config
 from kmfdm.models import CellState, ChangeKind, ChangeSource, Issue, IssueSeverity
 
 
@@ -208,6 +209,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("KMFDM")
         self.resize(1200, 760)
+        self.workspace_config = load_workspace_config()
 
         tabs = QTabWidget()
         tabs.addTab(self._library_tab(mock_symbol_items()), "Symbols")
@@ -320,8 +322,11 @@ class MainWindow(QMainWindow):
         inspector.setPlainText("\n".join(lines))
 
     def _show_configuration_dialog(self) -> None:
-        dialog = ConfigurationDialog(self)
-        dialog.exec()
+        dialog = ConfigurationDialog(self.workspace_config, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.workspace_config = dialog.to_config()
+            save_workspace_config(self.workspace_config)
+            QMessageBox.information(self, "Configuration", "Workspace configuration saved.")
 
     def _show_preferences_dialog(self) -> None:
         QMessageBox.information(
@@ -371,8 +376,9 @@ class MainWindow(QMainWindow):
 
 
 class ConfigurationDialog(QDialog):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, config: WorkspaceConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.config = config
         self.setWindowTitle("Configuration")
         self.resize(620, 420)
 
@@ -383,6 +389,7 @@ class ConfigurationDialog(QDialog):
         root_layout = QHBoxLayout(root_row)
         root_layout.setContentsMargins(0, 0, 0, 0)
         self.library_root_input = QLineEdit()
+        self.library_root_input.setText(config.library_root)
         self.library_root_input.setPlaceholderText("Choose a local KiCad library root")
         browse_button = QPushButton("Browse...")
         browse_button.clicked.connect(self._choose_library_root)
@@ -390,15 +397,18 @@ class ConfigurationDialog(QDialog):
         root_layout.addWidget(browse_button)
         form_layout.addRow("Library root", root_row)
 
+        self.path_variable_input = QLineEdit()
+        self.path_variable_input.setText(config.path_variable)
+        self.path_variable_input.setPlaceholderText("KiCad path variable, such as KICAD_USER_LIB")
+        form_layout.addRow("Path variable", self.path_variable_input)
+
         self.symbol_libraries = QListWidget()
-        self._add_checked_item(self.symbol_libraries, "Analog.kicad_sym")
-        self._add_checked_item(self.symbol_libraries, "Connectors.kicad_sym")
-        form_layout.addRow("Symbol libraries", self.symbol_libraries)
+        self._populate_list(self.symbol_libraries, config.symbol_libraries)
+        form_layout.addRow("Symbol libraries", self._library_list_editor(self.symbol_libraries, self._add_symbol_library))
 
         self.footprint_libraries = QListWidget()
-        self._add_checked_item(self.footprint_libraries, "Connectors.pretty")
-        self._add_checked_item(self.footprint_libraries, "Mechanical.pretty")
-        form_layout.addRow("Footprint libraries", self.footprint_libraries)
+        self._populate_list(self.footprint_libraries, config.footprint_libraries)
+        form_layout.addRow("Footprint libraries", self._library_list_editor(self.footprint_libraries, self._add_footprint_library))
 
         layout.addLayout(form_layout)
 
@@ -412,17 +422,77 @@ class ConfigurationDialog(QDialog):
         if directory:
             self.library_root_input.setText(directory)
 
-    def _add_checked_item(self, list_widget: QListWidget, text: str) -> None:
+    def _library_list_editor(self, list_widget: QListWidget, add_callback) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(list_widget)
+
+        button_row = QHBoxLayout()
+        add_button = QPushButton("Add...")
+        add_button.clicked.connect(add_callback)
+        remove_button = QPushButton("Remove Selected")
+        remove_button.clicked.connect(lambda: self._remove_selected_items(list_widget))
+        button_row.addWidget(add_button)
+        button_row.addWidget(remove_button)
+        button_row.addStretch()
+        layout.addLayout(button_row)
+
+        return widget
+
+    def _add_symbol_library(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Add Symbol Libraries",
+            self.library_root_input.text(),
+            "KiCad symbol libraries (*.kicad_sym);;All files (*.*)",
+        )
+        for file_path in files:
+            self._add_checked_item(self.symbol_libraries, file_path)
+
+    def _add_footprint_library(self) -> None:
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Add Footprint Library",
+            self.library_root_input.text(),
+        )
+        if directory:
+            self._add_checked_item(self.footprint_libraries, directory)
+
+    def _remove_selected_items(self, list_widget: QListWidget) -> None:
+        for item in list_widget.selectedItems():
+            list_widget.takeItem(list_widget.row(item))
+
+    def _populate_list(self, list_widget: QListWidget, selections: list[LibrarySelection]) -> None:
+        for selection in selections:
+            self._add_checked_item(list_widget, selection.path, selection.enabled)
+
+    def _add_checked_item(self, list_widget: QListWidget, text: str, checked: bool = True) -> None:
         item = QListWidgetItem(text)
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-        item.setCheckState(Qt.CheckState.Checked)
+        item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
         list_widget.addItem(item)
 
-    def _add_unchecked_item(self, list_widget: QListWidget, text: str) -> None:
-        item = QListWidgetItem(text)
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-        item.setCheckState(Qt.CheckState.Unchecked)
-        list_widget.addItem(item)
+    def to_config(self) -> WorkspaceConfig:
+        return WorkspaceConfig(
+            library_root=self.library_root_input.text().strip(),
+            path_variable=self.path_variable_input.text().strip(),
+            symbol_libraries=self._list_to_selections(self.symbol_libraries),
+            footprint_libraries=self._list_to_selections(self.footprint_libraries),
+            policy_files=list(self.config.policy_files),
+        )
+
+    def _list_to_selections(self, list_widget: QListWidget) -> list[LibrarySelection]:
+        selections: list[LibrarySelection] = []
+        for row in range(list_widget.count()):
+            item = list_widget.item(row)
+            selections.append(
+                LibrarySelection(
+                    path=item.text(),
+                    enabled=item.checkState() == Qt.CheckState.Checked,
+                )
+            )
+        return selections
 
 
 def mock_symbol_items() -> list[MockItem]:

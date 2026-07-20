@@ -1,0 +1,86 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+
+CONFIG_SCHEMA_VERSION = 1
+DEFAULT_CONFIG_FILENAME = ".kmfdm-workspace.json"
+
+
+@dataclass
+class LibrarySelection:
+    path: str
+    enabled: bool = True
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | str) -> LibrarySelection:
+        if isinstance(data, str):
+            return cls(path=data)
+        return cls(
+            path=str(data.get("path", "")),
+            enabled=bool(data.get("enabled", True)),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "enabled": self.enabled,
+        }
+
+
+@dataclass
+class WorkspaceConfig:
+    library_root: str = ""
+    path_variable: str = ""
+    symbol_libraries: list[LibrarySelection] = field(default_factory=list)
+    footprint_libraries: list[LibrarySelection] = field(default_factory=list)
+    policy_files: list[LibrarySelection] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> WorkspaceConfig:
+        return cls(
+            library_root=str(data.get("library_root", "")),
+            path_variable=str(data.get("path_variable", "")),
+            symbol_libraries=_library_list_from_dict(data.get("symbol_libraries", [])),
+            footprint_libraries=_library_list_from_dict(data.get("footprint_libraries", [])),
+            policy_files=_library_list_from_dict(data.get("policy_files", [])),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "config_schema_version": CONFIG_SCHEMA_VERSION,
+            "library_root": self.library_root,
+            "path_variable": self.path_variable,
+            "symbol_libraries": [item.to_dict() for item in self.symbol_libraries],
+            "footprint_libraries": [item.to_dict() for item in self.footprint_libraries],
+            "policy_files": [item.to_dict() for item in self.policy_files],
+        }
+
+
+def load_workspace_config(config_path: Path | None = None) -> WorkspaceConfig:
+    path = config_path or Path.cwd() / DEFAULT_CONFIG_FILENAME
+    if not path.exists():
+        return WorkspaceConfig()
+
+    with path.open("r", encoding="utf-8") as file:
+        data = json.load(file)
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Workspace config must contain a JSON object: {path}")
+
+    return WorkspaceConfig.from_dict(data)
+
+
+def save_workspace_config(config: WorkspaceConfig, config_path: Path | None = None) -> None:
+    path = config_path or Path.cwd() / DEFAULT_CONFIG_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
+
+
+def _library_list_from_dict(value: Any) -> list[LibrarySelection]:
+    if not isinstance(value, list):
+        return []
+    return [LibrarySelection.from_dict(item) for item in value]

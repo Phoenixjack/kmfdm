@@ -12,7 +12,7 @@
 
 ## Near-Term
 
-- Wire the Library Configuration dialog to real persisted workspace settings.
+- Expand persisted workspace settings beyond the first `.kmfdm-workspace.json` foundation.
 - Add library root discovery and include/exclude controls for symbol and footprint libraries.
 - Build out the Changes tab with mock change groups and per-change inclusion controls.
 - Build the selective preview dialog using mock changes.

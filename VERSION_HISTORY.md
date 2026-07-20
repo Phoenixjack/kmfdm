@@ -1,6 +1,12 @@
 # Version History
 
-## Unreleased
+## v0.0.3 - 2026-07-20
+
+- Added `.kmfdm-workspace.json` as the ignored local workspace configuration file.
+- Added a workspace configuration model and JSON load/save helpers.
+- Wired the Configuration dialog to persisted library root, path variable, symbol libraries, and footprint libraries.
+
+## v0.0.2 - 2026-07-20
 
 - Fixed no-op table edits being marked as manual changes.
 - Made row save-inclusion controls easier to discover in the mock GUI.

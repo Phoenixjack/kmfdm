@@ -15,5 +15,6 @@ dist/
 *.egg-info/
 
 .kmfdm-history.jsonl
+.kmfdm-workspace.json
 *.bak
 *.tmp

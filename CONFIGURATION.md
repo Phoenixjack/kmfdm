@@ -11,6 +11,20 @@ KMFDM should treat metadata quality as user policy. This document will grow into
 
 Example policies are suggestions and should be disabled until the user opts in.
 
+## Workspace Configuration
+
+Local workspace settings are stored in `.kmfdm-workspace.json`.
+
+This file is ignored by Git because it may contain machine-specific paths and future local provider settings.
+
+Initial fields:
+
+- `library_root`
+- `path_variable`
+- `symbol_libraries`
+- `footprint_libraries`
+- `policy_files`
+
 ## Policy Concepts
 
 Policies may define:
