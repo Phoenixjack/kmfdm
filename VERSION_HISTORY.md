@@ -1,5 +1,20 @@
 # Version History
 
+## Unreleased
+
+- Fixed no-op table edits being marked as manual changes.
+- Made row save-inclusion controls easier to discover in the mock GUI.
+- Added a Help menu cell color legend.
+- Added bottom-window Save Selected, Revert Selected, Revert All, and Exit buttons.
+- Added Edit menu entries for Configuration and Preferences.
+- Added a mock Configuration dialog for library root and included-library selection.
+- Added a Help menu placeholder for Policy Guidance.
+- Added starter policy example files under `examples/policies/`.
+- Added `ROADMAP.md` with the Library Configuration dialog as a near-term feature.
+- Centered the Apply column checkbox rendering.
+- Removed misleading KiCad standard library examples from the mock Configuration dialog.
+- Added KIA/KMFDM shared configuration and interop goals to the roadmap.
+
 ## v0.0.1 - 2026-07-19
 
 Initial project bootstrap.

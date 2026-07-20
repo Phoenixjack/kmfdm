@@ -66,6 +66,18 @@ block_save
 }
 ```
 
+## Example Policy Files
+
+Starter example policies live in `examples/policies/`.
+
+These files are placeholders for likely policy families, not enabled defaults:
+
+- `minimal-library-policy.json`
+- `procurement-fields-policy.json`
+- `fab-readability-policy.json`
+- `datasheet-link-policy.json`
+- `manufacturer-part-policy.json`
+
 ## Regex Inspection
 
 Regex rules are inspection-only in the MVP.

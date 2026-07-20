@@ -1,0 +1,6 @@
+{
+  "name": "Datasheet Link Policy",
+  "description": "Starter placeholder for datasheet URL and local-path metadata checks.",
+  "enabled_by_default": false,
+  "rules": []
+}

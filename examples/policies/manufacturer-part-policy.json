@@ -1,0 +1,6 @@
+{
+  "name": "Manufacturer Part Policy",
+  "description": "Starter placeholder for manufacturer and manufacturer part-number metadata checks.",
+  "enabled_by_default": false,
+  "rules": []
+}

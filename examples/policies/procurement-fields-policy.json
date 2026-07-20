@@ -1,0 +1,6 @@
+{
+  "name": "Procurement Fields Policy",
+  "description": "Starter placeholder for supplier, purchase, and sourcing metadata checks.",
+  "enabled_by_default": false,
+  "rules": []
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Minimal Library Policy",
+  "description": "Starter placeholder for basic KiCad library metadata checks.",
+  "enabled_by_default": false,
+  "rules": []
+}

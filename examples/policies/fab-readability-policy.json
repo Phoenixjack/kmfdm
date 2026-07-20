@@ -1,0 +1,6 @@
+{
+  "name": "Fab Readability Policy",
+  "description": "Starter placeholder for keeping visible fabrication-layer values readable.",
+  "enabled_by_default": false,
+  "rules": []
+}
