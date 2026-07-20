@@ -29,7 +29,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kmfdm.config import LibrarySelection, WorkspaceConfig, load_workspace_config, save_workspace_config
+from kmfdm.config import (
+    LibrarySelection,
+    WorkspaceConfig,
+    load_workspace_config,
+    matching_symbol_library_for_footprint,
+    save_workspace_config,
+)
 from kmfdm.models import CellState, ChangeKind, ChangeSource, Issue, IssueSeverity
 
 
@@ -402,13 +408,13 @@ class ConfigurationDialog(QDialog):
         self.path_variable_input.setPlaceholderText("KiCad path variable, such as KICAD_USER_LIB")
         form_layout.addRow("Path variable", self.path_variable_input)
 
-        self.symbol_libraries = QListWidget()
-        self._populate_list(self.symbol_libraries, config.symbol_libraries)
-        form_layout.addRow("Symbol libraries", self._library_list_editor(self.symbol_libraries, self._add_symbol_library))
-
         self.footprint_libraries = QListWidget()
         self._populate_list(self.footprint_libraries, config.footprint_libraries)
         form_layout.addRow("Footprint libraries", self._library_list_editor(self.footprint_libraries, self._add_footprint_library))
+
+        self.symbol_libraries = QListWidget()
+        self._populate_list(self.symbol_libraries, config.symbol_libraries)
+        form_layout.addRow("Symbol libraries", self._library_list_editor(self.symbol_libraries, self._add_symbol_library))
 
         layout.addLayout(form_layout)
 
@@ -458,6 +464,7 @@ class ConfigurationDialog(QDialog):
         )
         if directory:
             self._add_checked_item(self.footprint_libraries, directory)
+            self._add_matching_symbol_library(directory)
 
     def _remove_selected_items(self, list_widget: QListWidget) -> None:
         for item in list_widget.selectedItems():
@@ -468,10 +475,20 @@ class ConfigurationDialog(QDialog):
             self._add_checked_item(list_widget, selection.path, selection.enabled)
 
     def _add_checked_item(self, list_widget: QListWidget, text: str, checked: bool = True) -> None:
+        if self._list_contains_text(list_widget, text):
+            return
         item = QListWidgetItem(text)
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
         list_widget.addItem(item)
+
+    def _add_matching_symbol_library(self, footprint_library: str) -> None:
+        symbol_library = matching_symbol_library_for_footprint(footprint_library)
+        if symbol_library is not None:
+            self._add_checked_item(self.symbol_libraries, str(symbol_library))
+
+    def _list_contains_text(self, list_widget: QListWidget, text: str) -> bool:
+        return any(list_widget.item(row).text() == text for row in range(list_widget.count()))
 
     def to_config(self) -> WorkspaceConfig:
         return WorkspaceConfig(
@@ -480,6 +497,7 @@ class ConfigurationDialog(QDialog):
             symbol_libraries=self._list_to_selections(self.symbol_libraries),
             footprint_libraries=self._list_to_selections(self.footprint_libraries),
             policy_files=list(self.config.policy_files),
+            kia_interop=dict(self.config.kia_interop),
         )
 
     def _list_to_selections(self, list_widget: QListWidget) -> list[LibrarySelection]:

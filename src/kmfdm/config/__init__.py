@@ -4,6 +4,7 @@ from kmfdm.config.workspace import (
     LibrarySelection,
     WorkspaceConfig,
     load_workspace_config,
+    matching_symbol_library_for_footprint,
     save_workspace_config,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "LibrarySelection",
     "WorkspaceConfig",
     "load_workspace_config",
+    "matching_symbol_library_for_footprint",
     "save_workspace_config",
 ]

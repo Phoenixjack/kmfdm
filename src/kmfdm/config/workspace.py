@@ -38,6 +38,7 @@ class WorkspaceConfig:
     symbol_libraries: list[LibrarySelection] = field(default_factory=list)
     footprint_libraries: list[LibrarySelection] = field(default_factory=list)
     policy_files: list[LibrarySelection] = field(default_factory=list)
+    kia_interop: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WorkspaceConfig:
@@ -47,6 +48,7 @@ class WorkspaceConfig:
             symbol_libraries=_library_list_from_dict(data.get("symbol_libraries", [])),
             footprint_libraries=_library_list_from_dict(data.get("footprint_libraries", [])),
             policy_files=_library_list_from_dict(data.get("policy_files", [])),
+            kia_interop=_dict_from_value(data.get("kia_interop", {})),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -57,6 +59,7 @@ class WorkspaceConfig:
             "symbol_libraries": [item.to_dict() for item in self.symbol_libraries],
             "footprint_libraries": [item.to_dict() for item in self.footprint_libraries],
             "policy_files": [item.to_dict() for item in self.policy_files],
+            "kia_interop": dict(self.kia_interop),
         }
 
 
@@ -84,3 +87,16 @@ def _library_list_from_dict(value: Any) -> list[LibrarySelection]:
     if not isinstance(value, list):
         return []
     return [LibrarySelection.from_dict(item) for item in value]
+
+
+def _dict_from_value(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def matching_symbol_library_for_footprint(footprint_library: Path | str) -> Path | None:
+    footprint_path = Path(footprint_library)
+    if footprint_path.suffix != ".pretty":
+        return None
+
+    symbol_path = footprint_path.with_suffix(".kicad_sym")
+    return symbol_path if symbol_path.is_file() else None

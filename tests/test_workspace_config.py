@@ -1,6 +1,12 @@
 import json
 
-from kmfdm.config import LibrarySelection, WorkspaceConfig, load_workspace_config, save_workspace_config
+from kmfdm.config import (
+    LibrarySelection,
+    WorkspaceConfig,
+    load_workspace_config,
+    matching_symbol_library_for_footprint,
+    save_workspace_config,
+)
 
 
 def test_load_workspace_config_returns_defaults_when_missing(tmp_path) -> None:
@@ -19,6 +25,7 @@ def test_save_and_load_workspace_config_round_trip(tmp_path) -> None:
         path_variable="KICAD_USER_LIB",
         symbol_libraries=[LibrarySelection("symbols.kicad_sym", enabled=True)],
         footprint_libraries=[LibrarySelection("Connectors.pretty", enabled=False)],
+        kia_interop={"source": "reserved-for-future-kia-import"},
     )
 
     save_workspace_config(config, config_path)
@@ -37,3 +44,21 @@ def test_workspace_config_rejects_non_object_json(tmp_path) -> None:
         assert "JSON object" in str(error)
     else:
         raise AssertionError("Expected ValueError")
+
+
+def test_matching_symbol_library_for_footprint_finds_sibling_match(tmp_path) -> None:
+    footprint_library = tmp_path / "Connectors.pretty"
+    symbol_library = tmp_path / "Connectors.kicad_sym"
+    footprint_library.mkdir()
+    symbol_library.write_text("(kicad_symbol_lib)\n", encoding="utf-8")
+
+    assert matching_symbol_library_for_footprint(footprint_library) == symbol_library
+
+
+def test_matching_symbol_library_for_footprint_requires_exact_sibling_match(tmp_path) -> None:
+    footprint_library = tmp_path / "Connectors.pretty"
+    near_miss = tmp_path / "Connector.kicad_sym"
+    footprint_library.mkdir()
+    near_miss.write_text("(kicad_symbol_lib)\n", encoding="utf-8")
+
+    assert matching_symbol_library_for_footprint(footprint_library) is None

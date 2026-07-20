@@ -1,5 +1,11 @@
 # Version History
 
+## Unreleased
+
+- Reserved a `kia_interop` workspace config section for future KIA/KMFDM config mapping.
+- Moved the footprint-library section above the symbol-library section in the Configuration dialog.
+- Added exact sibling symbol-library detection when adding a footprint library.
+
 ## v0.0.3 - 2026-07-20
 
 - Added `.kmfdm-workspace.json` as the ignored local workspace configuration file.

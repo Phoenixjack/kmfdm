@@ -24,6 +24,9 @@ Initial fields:
 - `symbol_libraries`
 - `footprint_libraries`
 - `policy_files`
+- `kia_interop`
+
+`kia_interop` is reserved for future KiCad Import Assistant compatibility. It should leave room for copying or mapping compatible KIA private-data values such as library root, path variable, import destinations, schema profiles, and API provider settings without forcing KMFDM to share KIA's exact file format.
 
 ## Policy Concepts
 

@@ -21,6 +21,7 @@
 - Add table filtering for issues, pending changes, and selected libraries.
 - Add tests around table-model edit and check-state behavior.
 - Mirror relevant KiCad Import Assistant profile concepts in the KMFDM Configuration dialog.
+- Auto-detect exact sibling symbol libraries when adding footprint libraries, such as `Connectors.pretty` and `Connectors.kicad_sym`.
 
 ## After the GUI Slice Feels Right
 
@@ -43,6 +44,7 @@
 - Detect a nearby KiCad Import Assistant checkout or known config file when possible, without requiring a fixed folder layout.
 - Offer to import or copy compatible local settings from KIA into KMFDM after user confirmation.
 - Evaluate a shared user-level config layer for common values such as library root, KiCad path variable, configured library structures, and API provider keys.
+- Preserve a KMFDM config namespace for KIA compatibility without requiring both apps to use the same on-disk config format.
 - Keep app-specific settings separate when the concepts diverge.
 - Explore mapping KIA import destinations and schema profiles into KMFDM library configuration and policy defaults.
 - Support user-defined library structures rather than assuming one personal folder layout or the KiCad standard libraries.
