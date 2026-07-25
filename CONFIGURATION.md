@@ -21,6 +21,7 @@ Initial fields:
 
 - `library_root`
 - `path_variable`
+- `layout_profile_id`
 - `symbol_libraries`
 - `footprint_libraries`
 - `policy_files`
@@ -49,6 +50,9 @@ Example layout profiles live in `examples/layouts/`:
 - `separated-subfolders.json`
 - `split-type-roots.json`
 
+The selected profile is stored in `.kmfdm-workspace.json` as `layout_profile_id`.
+The GUI loads the same starter profiles from bundled application resources so the options remain available outside a source checkout.
+
 The initial built-in candidates are:
 
 ```text
@@ -69,9 +73,9 @@ split-type-roots
   {library_root}/Models/{library_key}/
 ```
 
-The future setup wizard should let users choose one of these layouts, customize path templates, or start from autodetected suggestions.
+The Configuration dialog lets users choose one of these shipped example layouts. Later setup work should allow users to customize path templates or start from autodetected suggestions.
 
-The first code foundation for layout profiles is a parser/validator for the example JSON files. GUI selection, path-template rendering, and filesystem scanning are intentionally separate later steps.
+The first code foundation for layout profiles is a parser/validator for the example JSON files plus persisted GUI selection. Path-template rendering and filesystem scanning are intentionally separate later steps.
 
 ## First-Run and Repair Setup
 
@@ -86,7 +90,7 @@ Setup goals:
 - Rebuild symbol and footprint library lists from a selected root folder.
 - Optionally import compatible KIA settings after user confirmation.
 
-Autodetection should be advisory. It should scan a selected root folder, identify likely layout patterns, report confidence, and let the user accept, customize, or ignore the suggestion.
+Autodetection is a back-burner feature. When added, it should be advisory: scan a selected root folder, identify likely layout patterns, report confidence, and let the user accept, customize, or ignore the suggestion.
 
 ## Policy Concepts
 

@@ -14,6 +14,7 @@ def test_load_workspace_config_returns_defaults_when_missing(tmp_path) -> None:
 
     assert config.library_root == ""
     assert config.path_variable == ""
+    assert config.layout_profile_id == ""
     assert config.symbol_libraries == []
     assert config.footprint_libraries == []
 
@@ -23,6 +24,7 @@ def test_save_and_load_workspace_config_round_trip(tmp_path) -> None:
     config = WorkspaceConfig(
         library_root="libraries",
         path_variable="KICAD_USER_LIB",
+        layout_profile_id="flat-contained-symbols",
         symbol_libraries=[LibrarySelection("symbols.kicad_sym", enabled=True)],
         footprint_libraries=[LibrarySelection("Connectors.pretty", enabled=False)],
         kia_interop={"source": "reserved-for-future-kia-import"},

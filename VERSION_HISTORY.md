@@ -2,10 +2,13 @@
 
 ## Unreleased
 
+- Added persisted workspace selection for library layout profiles.
+- Added a Configuration dialog layout-profile selector populated from `examples/layouts/`.
+- Bundled starter layout profiles as application resources for packaged runs.
 - Added library layout profile examples for flat-contained, separated-subfolder, and split-root structures.
 - Added a layout profile model and JSON loader for future shared layout configuration.
 - Added configuration docs for first-run and repair guided setup.
-- Added future roadmap item for layout autodetection from a selected library root.
+- Moved layout autodetection to a back-burner roadmap item.
 - Added README disclosure that KMFDM is vibe coded with AI assistance.
 - Added README reference to the related KiCad Import Assistant project.
 - Moved the Megalomaniacal inside joke into project documentation instead of the GitHub short description.

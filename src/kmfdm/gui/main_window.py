@@ -10,6 +10,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRect, Qt
 from PySide6.QtGui import QAction, QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
 from kmfdm.config import (
     LibrarySelection,
     WorkspaceConfig,
+    load_bundled_layout_profiles,
     load_workspace_config,
     matching_symbol_library_for_footprint,
     save_workspace_config,
@@ -415,6 +417,18 @@ class ConfigurationDialog(QDialog):
         self.path_variable_input.setPlaceholderText("KiCad path variable, such as KICAD_USER_LIB")
         form_layout.addRow("Path variable", self.path_variable_input)
 
+        self.layout_profiles = _load_configuration_layout_profiles()
+        self.layout_profile_combo = QComboBox()
+        self.layout_profile_combo.addItem("No layout selected", "")
+        for profile in self.layout_profiles:
+            self.layout_profile_combo.addItem(f"{profile.name} ({profile.profile_id})", profile.profile_id)
+
+        selected_profile_index = self.layout_profile_combo.findData(config.layout_profile_id)
+        if selected_profile_index >= 0:
+            self.layout_profile_combo.setCurrentIndex(selected_profile_index)
+        self.layout_profile_combo.setToolTip("Select how this workspace organizes symbols, footprints, and models.")
+        form_layout.addRow("Library layout", self.layout_profile_combo)
+
         self.footprint_libraries = QListWidget()
         self._populate_list(self.footprint_libraries, config.footprint_libraries)
         form_layout.addRow("Footprint libraries", self._library_list_editor(self.footprint_libraries, self._add_footprint_library))
@@ -501,6 +515,7 @@ class ConfigurationDialog(QDialog):
         return WorkspaceConfig(
             library_root=self.library_root_input.text().strip(),
             path_variable=self.path_variable_input.text().strip(),
+            layout_profile_id=str(self.layout_profile_combo.currentData() or ""),
             symbol_libraries=self._list_to_selections(self.symbol_libraries),
             footprint_libraries=self._list_to_selections(self.footprint_libraries),
             policy_files=list(self.config.policy_files),
@@ -518,6 +533,10 @@ class ConfigurationDialog(QDialog):
                 )
             )
         return selections
+
+
+def _load_configuration_layout_profiles():
+    return load_bundled_layout_profiles()
 
 
 def mock_symbol_items() -> list[MockItem]:

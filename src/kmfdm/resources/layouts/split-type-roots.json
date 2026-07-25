@@ -1,0 +1,17 @@
+{
+  "layout_profile_version": 1,
+  "id": "split-type-roots",
+  "name": "Split type roots",
+  "description": "Symbols, footprints, and models live under separate top-level folders.",
+  "paths": {
+    "footprint_library": "{library_root}/Footprints/{library_key}.pretty",
+    "symbol_library": "{library_root}/Symbols/{library_key}.kicad_sym",
+    "model_directory": "{library_root}/Models/{library_key}"
+  },
+  "discovery": {
+    "symbol_match": [
+      "{library_root}/Symbols/{library_key}.kicad_sym"
+    ],
+    "model_extensions": [".step", ".stp", ".wrl"]
+  }
+}

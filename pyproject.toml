@@ -24,7 +24,7 @@ kmfdm = "kmfdm.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-kmfdm = ["resources/*.ico"]
+kmfdm = ["resources/*.ico", "resources/layouts/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

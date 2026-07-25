@@ -1,0 +1,18 @@
+{
+  "layout_profile_version": 1,
+  "id": "flat-contained-symbols",
+  "name": "Flat contained symbols",
+  "description": "Each footprint library folder contains matching symbols, footprints, and models.",
+  "paths": {
+    "footprint_library": "{library_root}/{library_key}.pretty",
+    "symbol_library": "{library_root}/{library_key}.pretty/{library_key}.kicad_sym",
+    "model_directory": "{library_root}/{library_key}.pretty"
+  },
+  "discovery": {
+    "symbol_match": [
+      "{footprint_library}/{library_key}.kicad_sym",
+      "{library_root}/{library_key}.kicad_sym"
+    ],
+    "model_extensions": [".step", ".stp", ".wrl"]
+  }
+}

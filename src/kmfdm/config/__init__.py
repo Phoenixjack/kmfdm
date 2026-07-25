@@ -12,6 +12,7 @@ from kmfdm.config.layout_profile import (
     LayoutDiscovery,
     LayoutPaths,
     LayoutProfile,
+    load_bundled_layout_profiles,
     load_layout_profile,
     load_layout_profiles,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "LayoutPaths",
     "LayoutProfile",
     "WorkspaceConfig",
+    "load_bundled_layout_profiles",
     "load_workspace_config",
     "load_layout_profile",
     "load_layout_profiles",

@@ -1,7 +1,12 @@
 import json
 from pathlib import Path
 
-from kmfdm.config import LAYOUT_PROFILE_VERSION, load_layout_profile, load_layout_profiles
+from kmfdm.config import (
+    LAYOUT_PROFILE_VERSION,
+    load_bundled_layout_profiles,
+    load_layout_profile,
+    load_layout_profiles,
+)
 
 
 def test_layout_examples_are_valid_json() -> None:
@@ -31,6 +36,16 @@ def test_layout_examples_load_as_profiles() -> None:
     }
     assert all(profile.paths.footprint_library for profile in profiles)
     assert all(profile.discovery.model_extensions for profile in profiles)
+
+
+def test_bundled_layout_profiles_load() -> None:
+    profiles = load_bundled_layout_profiles()
+
+    assert {profile.profile_id for profile in profiles} == {
+        "flat-contained-symbols",
+        "separated-subfolders",
+        "split-type-roots",
+    }
 
 
 def test_layout_profile_rejects_unsupported_version(tmp_path) -> None:

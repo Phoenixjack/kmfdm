@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -64,8 +65,27 @@ def load_layout_profile(path: Path) -> LayoutProfile:
     with path.open("r", encoding="utf-8") as file:
         data = json.load(file)
 
+    return _profile_from_data(data, path)
+
+
+def load_bundled_layout_profiles() -> list[LayoutProfile]:
+    directory = resources.files("kmfdm").joinpath("resources", "layouts")
+    profile_files = sorted(
+        (item for item in directory.iterdir() if item.name.endswith(".json")),
+        key=lambda item: item.name,
+    )
+
+    profiles = []
+    for profile_file in profile_files:
+        with profile_file.open("r", encoding="utf-8") as file:
+            profiles.append(_profile_from_data(json.load(file), profile_file))
+
+    return profiles
+
+
+def _profile_from_data(data: Any, source: object) -> LayoutProfile:
     if not isinstance(data, dict):
-        raise ValueError(f"Layout profile must contain a JSON object: {path}")
+        raise ValueError(f"Layout profile must contain a JSON object: {source}")
 
     return LayoutProfile.from_dict(data)
 
