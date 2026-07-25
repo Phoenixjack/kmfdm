@@ -22,3 +22,4 @@ def test_cell_state_reports_issue_tooltip() -> None:
 
     assert not cell.is_changed
     assert "WARNING: Missing datasheet" in cell.tooltip_text()
+    assert "Datasheet field is empty." in cell.tooltip_text()

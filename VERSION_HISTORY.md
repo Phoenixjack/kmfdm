@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Connected mock policy findings to matching Symbols and Footprints table cell issue states.
+- Expanded issue tooltips and inspectors with policy detail and rule names.
 - Added a read-only policy audit service for mock library rows.
 - Added Audit and Rules mock policy findings with finding detail display.
 - Added tests for required-field, alias, regex, and max-length policy findings.

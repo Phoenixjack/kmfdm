@@ -170,7 +170,7 @@ These files are disabled-by-default examples for likely policy families:
 - `manufacturer-part-policy.json`
 
 The GUI loads the same starter policies from bundled application resources so the Audit and Rules tab can show them outside a source checkout.
-The Audit and Rules tab currently shows policy details and mock-data findings. These findings demonstrate rule behavior but do not yet scan or modify real KiCad files.
+The Audit and Rules tab currently shows policy details and mock-data findings. Findings that map to visible mock table fields are also attached to those table cells, so the cell background, tooltip, and inspector can show the same issue context. These findings demonstrate rule behavior but do not yet scan or modify real KiCad files.
 
 Supported first-pass rule types:
 

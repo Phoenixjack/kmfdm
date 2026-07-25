@@ -72,6 +72,10 @@ class CellState:
             issue_lines = ["Issues:"]
             for issue in self.issues:
                 issue_lines.append(f"{issue.severity.value.upper()}: {issue.title}")
+                if issue.rule_name:
+                    issue_lines.append(f"Rule: {issue.rule_name}")
+                if issue.detail:
+                    issue_lines.append(issue.detail)
             sections.append("\n".join(issue_lines))
 
         return "\n\n".join(sections)

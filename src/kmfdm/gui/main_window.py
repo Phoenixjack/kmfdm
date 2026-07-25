@@ -260,10 +260,22 @@ class MainWindow(QMainWindow):
         self.workspace_config = WorkspaceConfig()
         self.workspace_setup_message = ""
         self._load_workspace_config_for_launch()
+        self.symbol_items = mock_symbol_items()
+        self.footprint_items = mock_footprint_items()
+        self.policy_profiles = load_bundled_policy_profiles()
+        self.policy_findings = audit_items_against_policies(
+            mock_audit_items(self.symbol_items, self.footprint_items),
+            self.policy_profiles,
+        )
+        attach_policy_findings_to_mock_items(
+            self.symbol_items,
+            self.footprint_items,
+            self.policy_findings,
+        )
 
         tabs = QTabWidget()
-        tabs.addTab(self._library_tab(mock_symbol_items()), "Symbols")
-        tabs.addTab(self._library_tab(mock_footprint_items()), "Footprints")
+        tabs.addTab(self._library_tab(self.symbol_items), "Symbols")
+        tabs.addTab(self._library_tab(self.footprint_items), "Footprints")
         tabs.addTab(self._audit_rules_tab(), "Audit and Rules")
         tabs.addTab(QLabel("Changes prototype placeholder"), "Changes")
         tabs.addTab(QLabel("History prototype placeholder"), "History")
@@ -370,20 +382,18 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QHBoxLayout(widget)
 
-        policies = load_bundled_policy_profiles()
-        findings = audit_items_against_policies(mock_audit_items(), policies)
         policy_list = QListWidget()
         policy_list.setMinimumWidth(280)
         details = ReadOnlyInfoPanel("Select a policy to inspect it.")
         findings_list = QListWidget()
         findings_list.setMinimumHeight(180)
 
-        for policy in policies:
+        for policy in self.policy_profiles:
             item = QListWidgetItem(f"{policy.name} ({len(policy.rules)} rules)")
             item.setData(Qt.ItemDataRole.UserRole, policy)
             policy_list.addItem(item)
 
-        for finding in findings:
+        for finding in self.policy_findings:
             item = QListWidgetItem(
                 f"{finding.severity.upper()} | {finding.item_label} | {finding.field}"
             )
@@ -403,7 +413,7 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right_side)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addWidget(details, 2)
-        right_layout.addWidget(QLabel(f"Mock Policy Findings ({len(findings)})"))
+        right_layout.addWidget(QLabel(f"Mock Policy Findings ({len(self.policy_findings)})"))
         right_layout.addWidget(findings_list, 1)
 
         layout.addWidget(policy_list, 1)
@@ -489,7 +499,12 @@ class MainWindow(QMainWindow):
             )
             if cell.issues:
                 lines.extend(["", "Issues"])
-                lines.extend(f"{issue.severity.value.upper()}: {issue.title}" for issue in cell.issues)
+                for issue in cell.issues:
+                    lines.append(f"{issue.severity.value.upper()}: {issue.title}")
+                    if issue.rule_name:
+                        lines.append(f"Rule: {issue.rule_name}")
+                    if issue.detail:
+                        lines.append(issue.detail)
         else:
             lines.append("Fixed item metadata column.")
 
@@ -811,10 +826,15 @@ def mock_footprint_items() -> list[MockItem]:
     ]
 
 
-def mock_audit_items() -> list[AuditItem]:
+def mock_audit_items(
+    symbol_items: list[MockItem] | None = None,
+    footprint_items: list[MockItem] | None = None,
+) -> list[AuditItem]:
+    symbol_items = symbol_items if symbol_items is not None else mock_symbol_items()
+    footprint_items = footprint_items if footprint_items is not None else mock_footprint_items()
     return [
-        *_mock_items_to_audit_items("symbol", mock_symbol_items()),
-        *_mock_items_to_audit_items("footprint", mock_footprint_items()),
+        *_mock_items_to_audit_items("symbol", symbol_items),
+        *_mock_items_to_audit_items("footprint", footprint_items),
     ]
 
 
@@ -828,6 +848,41 @@ def _mock_items_to_audit_items(item_type: str, items: list[MockItem]) -> list[Au
         )
         for item in items
     ]
+
+
+def attach_policy_findings_to_mock_items(
+    symbol_items: list[MockItem],
+    footprint_items: list[MockItem],
+    findings: list[PolicyFinding],
+) -> None:
+    items_by_key = {
+        **_mock_item_index("symbol", symbol_items),
+        **_mock_item_index("footprint", footprint_items),
+    }
+    for finding in findings:
+        item = items_by_key.get((finding.item_type, finding.library, finding.item_name))
+        if item is None:
+            continue
+
+        cell = item.cells.get(finding.field)
+        if cell is None:
+            continue
+
+        issue = Issue(
+            severity=IssueSeverity(finding.severity),
+            title=finding.rule_name,
+            detail=f"{finding.message} Policy: {finding.policy_name}.",
+            rule_name=finding.rule_name,
+        )
+        if issue not in cell.issues:
+            cell.issues.append(issue)
+
+
+def _mock_item_index(item_type: str, items: list[MockItem]) -> dict[tuple[str, str, str], MockItem]:
+    return {
+        (item_type, item.library, item.name): item
+        for item in items
+    }
 
 
 def run() -> int:

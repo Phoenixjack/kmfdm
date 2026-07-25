@@ -23,7 +23,7 @@
 - Add status-bar counts for loaded libraries, items, issues, and pending changes.
 - Add table filtering for issues, pending changes, and selected libraries.
 - Add tests around table-model edit and check-state behavior.
-- Connect mock policy findings to the Symbols and Footprints table issue states.
+- Add issue-filter controls that use policy-generated table issue states.
 - Mirror relevant KiCad Import Assistant profile concepts in the KMFDM Configuration dialog.
 
 ## After the GUI Slice Feels Right
