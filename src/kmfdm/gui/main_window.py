@@ -47,6 +47,7 @@ from kmfdm.config import (
     workspace_setup_issue,
 )
 from kmfdm.models import CellState, ChangeKind, ChangeSource, Issue, IssueSeverity
+from kmfdm.services.policy_audit import AuditItem, PolicyFinding, audit_items_against_policies
 
 
 WINDOWS_APP_ID = "Phoenixjack.KMFDM"
@@ -370,21 +371,43 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(widget)
 
         policies = load_bundled_policy_profiles()
+        findings = audit_items_against_policies(mock_audit_items(), policies)
         policy_list = QListWidget()
         policy_list.setMinimumWidth(280)
         details = ReadOnlyInfoPanel("Select a policy to inspect it.")
+        findings_list = QListWidget()
+        findings_list.setMinimumHeight(180)
 
         for policy in policies:
             item = QListWidgetItem(f"{policy.name} ({len(policy.rules)} rules)")
             item.setData(Qt.ItemDataRole.UserRole, policy)
             policy_list.addItem(item)
 
-        policy_list.currentItemChanged.connect(lambda item: self._show_policy_details(item, details))
+        for finding in findings:
+            item = QListWidgetItem(
+                f"{finding.severity.upper()} | {finding.item_label} | {finding.field}"
+            )
+            item.setData(Qt.ItemDataRole.UserRole, finding)
+            findings_list.addItem(item)
+
+        policy_list.currentItemChanged.connect(
+            lambda current, _previous: self._show_policy_details(current, details)
+        )
+        findings_list.currentItemChanged.connect(
+            lambda current, _previous: self._show_policy_finding(current, details)
+        )
         if policy_list.count():
             policy_list.setCurrentRow(0)
 
+        right_side = QWidget()
+        right_layout = QVBoxLayout(right_side)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(details, 2)
+        right_layout.addWidget(QLabel(f"Mock Policy Findings ({len(findings)})"))
+        right_layout.addWidget(findings_list, 1)
+
         layout.addWidget(policy_list, 1)
-        layout.addWidget(details, 3)
+        layout.addWidget(right_side, 3)
         return widget
 
     def _show_policy_details(self, item: QListWidgetItem | None, details: ReadOnlyInfoPanel) -> None:
@@ -411,6 +434,29 @@ class MainWindow(QMainWindow):
             ]
         )
         details.setPlainText("\n".join(lines))
+
+    def _show_policy_finding(self, item: QListWidgetItem | None, details: ReadOnlyInfoPanel) -> None:
+        if item is None:
+            return
+
+        finding: PolicyFinding = item.data(Qt.ItemDataRole.UserRole)
+        details.setPlainText(
+            "\n".join(
+                [
+                    finding.rule_name,
+                    finding.message,
+                    "",
+                    f"Policy: {finding.policy_name}",
+                    f"Rule type: {finding.rule_type}",
+                    f"Severity: {finding.severity}",
+                    f"Save behavior: {finding.save_behavior}",
+                    "",
+                    f"Item: {finding.item_label}",
+                    f"Item type: {finding.item_type}",
+                    f"Field: {finding.field}",
+                ]
+            )
+        )
 
     def _show_cell(self, index: QModelIndex, model: ComponentTableModel, inspector: ReadOnlyInfoPanel) -> None:
         if not index.isValid():
@@ -762,6 +808,25 @@ def mock_footprint_items() -> list[MockItem]:
                 "Datasheet": CellState("", ""),
             },
         ),
+    ]
+
+
+def mock_audit_items() -> list[AuditItem]:
+    return [
+        *_mock_items_to_audit_items("symbol", mock_symbol_items()),
+        *_mock_items_to_audit_items("footprint", mock_footprint_items()),
+    ]
+
+
+def _mock_items_to_audit_items(item_type: str, items: list[MockItem]) -> list[AuditItem]:
+    return [
+        AuditItem(
+            item_type=item_type,
+            library=item.library,
+            name=item.name,
+            fields={field: cell.working_value for field, cell in item.cells.items()},
+        )
+        for item in items
     ]
 
 

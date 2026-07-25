@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a read-only policy audit service for mock library rows.
+- Added Audit and Rules mock policy findings with finding detail display.
+- Added tests for required-field, alias, regex, and max-length policy findings.
 - Added the first versioned policy schema and JSON loader.
 - Converted starter policy examples into disabled-by-default parseable policies.
 - Bundled starter policy examples as application resources for packaged runs.
