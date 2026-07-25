@@ -6,6 +6,7 @@ from kmfdm.config.workspace import (
     load_workspace_config,
     matching_symbol_library_for_footprint,
     save_workspace_config,
+    workspace_setup_issue,
 )
 from kmfdm.config.layout_profile import (
     LAYOUT_PROFILE_VERSION,
@@ -32,4 +33,5 @@ __all__ = [
     "load_layout_profiles",
     "matching_symbol_library_for_footprint",
     "save_workspace_config",
+    "workspace_setup_issue",
 ]

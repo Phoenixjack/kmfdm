@@ -86,6 +86,14 @@ def save_workspace_config(config: WorkspaceConfig, config_path: Path | None = No
     path.write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
 
 
+def workspace_setup_issue(config: WorkspaceConfig, *, config_exists: bool = True) -> str:
+    if not config_exists:
+        return "No workspace configuration file was found."
+    if not config.layout_profile_id:
+        return "No library layout has been selected."
+    return ""
+
+
 def _library_list_from_dict(value: Any) -> list[LibrarySelection]:
     if not isinstance(value, list):
         return []

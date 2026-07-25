@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 import sys
 from dataclasses import dataclass
 from importlib import resources
+from pathlib import Path
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRect, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRect, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -34,12 +36,14 @@ from PySide6.QtWidgets import (
 )
 
 from kmfdm.config import (
+    DEFAULT_CONFIG_FILENAME,
     LibrarySelection,
     WorkspaceConfig,
     load_bundled_layout_profiles,
     load_workspace_config,
     matching_symbol_library_for_footprint,
     save_workspace_config,
+    workspace_setup_issue,
 )
 from kmfdm.models import CellState, ChangeKind, ChangeSource, Issue, IssueSeverity
 
@@ -224,7 +228,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("KMFDM")
         self.setWindowIcon(kmfdm_icon())
         self.resize(1200, 760)
-        self.workspace_config = load_workspace_config()
+        self.workspace_config_path = Path.cwd() / DEFAULT_CONFIG_FILENAME
+        self.workspace_config = WorkspaceConfig()
+        self.workspace_setup_message = ""
+        self._load_workspace_config_for_launch()
 
         tabs = QTabWidget()
         tabs.addTab(self._library_tab(mock_symbol_items()), "Symbols")
@@ -235,7 +242,7 @@ class MainWindow(QMainWindow):
 
         edit_menu = self.menuBar().addMenu("&Edit")
         configuration_action = QAction("Configuration...", self)
-        configuration_action.triggered.connect(self._show_configuration_dialog)
+        configuration_action.triggered.connect(lambda: self._show_configuration_dialog())
         preferences_action = QAction("Preferences...", self)
         preferences_action.triggered.connect(self._show_preferences_dialog)
         edit_menu.addAction(configuration_action)
@@ -255,6 +262,40 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(tabs)
         central_layout.addLayout(self._action_bar())
         self.setCentralWidget(central_widget)
+        QTimer.singleShot(0, self._show_required_configuration_if_needed)
+
+    def _load_workspace_config_for_launch(self) -> None:
+        config_exists = self.workspace_config_path.exists()
+        try:
+            self.workspace_config = load_workspace_config(self.workspace_config_path)
+            self.workspace_setup_message = workspace_setup_issue(
+                self.workspace_config,
+                config_exists=config_exists,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            self.workspace_config = WorkspaceConfig()
+            self.workspace_setup_message = (
+                "Workspace configuration could not be loaded and needs repair."
+                f"\n\n{error}"
+            )
+
+    def _show_required_configuration_if_needed(self) -> None:
+        if not self.workspace_setup_message:
+            return
+
+        QMessageBox.warning(
+            self,
+            "Workspace Setup Required",
+            "\n".join(
+                [
+                    self.workspace_setup_message,
+                    "",
+                    "Select a library layout before continuing.",
+                ]
+            ),
+        )
+        if not self._show_configuration_dialog(require_layout_profile=True):
+            self.close()
 
     def _action_bar(self) -> QHBoxLayout:
         layout = QHBoxLayout()
@@ -336,12 +377,15 @@ class MainWindow(QMainWindow):
 
         inspector.setPlainText("\n".join(lines))
 
-    def _show_configuration_dialog(self) -> None:
-        dialog = ConfigurationDialog(self.workspace_config, self)
+    def _show_configuration_dialog(self, require_layout_profile: bool = False) -> bool:
+        dialog = ConfigurationDialog(self.workspace_config, self, require_layout_profile=require_layout_profile)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.workspace_config = dialog.to_config()
             save_workspace_config(self.workspace_config)
+            self.workspace_setup_message = ""
             QMessageBox.information(self, "Configuration", "Workspace configuration saved.")
+            return True
+        return False
 
     def _show_preferences_dialog(self) -> None:
         QMessageBox.information(
@@ -391,11 +435,18 @@ class MainWindow(QMainWindow):
 
 
 class ConfigurationDialog(QDialog):
-    def __init__(self, config: WorkspaceConfig, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        config: WorkspaceConfig,
+        parent: QWidget | None = None,
+        *,
+        require_layout_profile: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.config = config
+        self.require_layout_profile = require_layout_profile
         self.setWindowTitle("Configuration")
-        self.resize(620, 420)
+        self.resize(720, 560)
 
         layout = QVBoxLayout(self)
         form_layout = QFormLayout()
@@ -427,7 +478,14 @@ class ConfigurationDialog(QDialog):
         if selected_profile_index >= 0:
             self.layout_profile_combo.setCurrentIndex(selected_profile_index)
         self.layout_profile_combo.setToolTip("Select how this workspace organizes symbols, footprints, and models.")
+        self.layout_profile_combo.currentIndexChanged.connect(self._update_layout_profile_details)
         form_layout.addRow("Library layout", self.layout_profile_combo)
+
+        self.layout_profile_details = QPlainTextEdit()
+        self.layout_profile_details.setReadOnly(True)
+        self.layout_profile_details.setMaximumHeight(150)
+        form_layout.addRow("Layout details", self.layout_profile_details)
+        self._update_layout_profile_details()
 
         self.footprint_libraries = QListWidget()
         self._populate_list(self.footprint_libraries, config.footprint_libraries)
@@ -443,6 +501,16 @@ class ConfigurationDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def accept(self) -> None:
+        if self.require_layout_profile and not self.layout_profile_combo.currentData():
+            QMessageBox.warning(
+                self,
+                "Library Layout Required",
+                "Select a library layout before saving the workspace configuration.",
+            )
+            return
+        super().accept()
 
     def _choose_library_root(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "Choose Library Root", self.library_root_input.text())
@@ -510,6 +578,45 @@ class ConfigurationDialog(QDialog):
 
     def _list_contains_text(self, list_widget: QListWidget, text: str) -> bool:
         return any(list_widget.item(row).text() == text for row in range(list_widget.count()))
+
+    def _update_layout_profile_details(self) -> None:
+        profile = self._selected_layout_profile()
+        if profile is None:
+            self.layout_profile_details.setPlainText(
+                "\n".join(
+                    [
+                        "Select the layout that best describes where your custom KiCad libraries live.",
+                        "",
+                        "This choice does not scan, copy, or modify files yet. It only tells KMFDM how to interpret the workspace later.",
+                    ]
+                )
+            )
+            return
+
+        self.layout_profile_details.setPlainText(
+            "\n".join(
+                [
+                    f"Name: {profile.name}",
+                    f"ID: {profile.profile_id}",
+                    "",
+                    profile.description,
+                    "",
+                    "Paths",
+                    f"Footprints: {profile.paths.footprint_library}",
+                    f"Symbols: {profile.paths.symbol_library}",
+                    f"Models: {profile.paths.model_directory}",
+                    "",
+                    "Symbol match checks",
+                    *[f"- {path}" for path in profile.discovery.symbol_match],
+                    "",
+                    f"Model extensions: {', '.join(profile.discovery.model_extensions)}",
+                ]
+            )
+        )
+
+    def _selected_layout_profile(self):
+        profile_id = self.layout_profile_combo.currentData()
+        return next((profile for profile in self.layout_profiles if profile.profile_id == profile_id), None)
 
     def to_config(self) -> WorkspaceConfig:
         return WorkspaceConfig(

@@ -6,6 +6,7 @@ from kmfdm.config import (
     load_workspace_config,
     matching_symbol_library_for_footprint,
     save_workspace_config,
+    workspace_setup_issue,
 )
 
 
@@ -34,6 +35,24 @@ def test_save_and_load_workspace_config_round_trip(tmp_path) -> None:
     loaded = load_workspace_config(config_path)
 
     assert loaded == config
+
+
+def test_workspace_setup_issue_requires_existing_config() -> None:
+    config = WorkspaceConfig(layout_profile_id="flat-contained-symbols")
+
+    assert workspace_setup_issue(config, config_exists=False) == "No workspace configuration file was found."
+
+
+def test_workspace_setup_issue_requires_layout_profile() -> None:
+    config = WorkspaceConfig()
+
+    assert workspace_setup_issue(config, config_exists=True) == "No library layout has been selected."
+
+
+def test_workspace_setup_issue_passes_with_layout_profile() -> None:
+    config = WorkspaceConfig(layout_profile_id="flat-contained-symbols")
+
+    assert workspace_setup_issue(config, config_exists=True) == ""
 
 
 def test_workspace_config_rejects_non_object_json(tmp_path) -> None:

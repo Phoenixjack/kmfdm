@@ -75,11 +75,13 @@ split-type-roots
 
 The Configuration dialog lets users choose one of these shipped example layouts. Later setup work should allow users to customize path templates or start from autodetected suggestions.
 
-The first code foundation for layout profiles is a parser/validator for the example JSON files plus persisted GUI selection. Path-template rendering and filesystem scanning are intentionally separate later steps.
+The first code foundation for layout profiles is a parser/validator for the example JSON files, persisted GUI selection, and an in-dialog details panel that explains the selected profile. Path-template rendering and filesystem scanning are intentionally separate later steps.
 
 ## First-Run and Repair Setup
 
 KMFDM should eventually offer a guided setup when local configuration is missing, invalid, or intentionally recreated.
+
+The first setup behavior is intentionally small: when KMFDM starts without a workspace config, with an unreadable workspace config, or without a selected layout profile, it opens Configuration and requires a layout choice before continuing.
 
 Setup goals:
 

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a Configuration dialog details panel for selected library layout profiles.
+- Added startup setup detection for missing, unreadable, or layout-less workspace configuration.
+- Require a library layout selection before accepting setup-required Configuration dialogs.
 - Added persisted workspace selection for library layout profiles.
 - Added a Configuration dialog layout-profile selector populated from `examples/layouts/`.
 - Bundled starter layout profiles as application resources for packaged runs.

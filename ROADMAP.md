@@ -15,7 +15,7 @@
 - Add the KMFDM icon and early application screenshots to `README.md`.
 - Expand persisted workspace settings beyond the first `.kmfdm-workspace.json` foundation.
 - Connect selected library layout profiles to Configuration dialog workflows.
-- Add first-run and repair guided setup for creating or recreating local workspace configuration.
+- Expand first-run and repair guided setup for creating or recreating local workspace configuration.
 - Add library root discovery and include/exclude controls for symbol and footprint libraries.
 - Build out the Changes tab with mock change groups and per-change inclusion controls.
 - Build the selective preview dialog using mock changes.
@@ -37,6 +37,7 @@
 ## Later
 
 - Add a read-only layout scanner that can suggest likely layout profiles from a selected library root.
+- Add user-customizable layout profile editing after bundled starter profiles are proven useful.
 - Add safe-save staging, backups, validation, and rollback.
 - Add sidecar history writes.
 - Add external modification detection.
