@@ -96,6 +96,8 @@ Autodetection is a back-burner feature. When added, it should be advisory: scan 
 
 ## Policy Concepts
 
+Policy files are versioned JSON documents. The first schema supports enough structure to load, validate, and display policy intent without applying it to real KiCad libraries yet.
+
 Policies may define:
 
 - Required fields.
@@ -135,13 +137,19 @@ block_save
 
 ```json
 {
+  "policy_schema_version": 1,
+  "id": "fab-readability-policy",
   "name": "Fab readability example",
+  "description": "Suggested checks for keeping fabrication-layer values readable.",
+  "enabled_by_default": false,
   "rules": [
     {
-      "type": "fab_value_length",
-      "target": "symbol.Value",
+      "id": "footprint-value-length",
+      "name": "Footprint Value stays compact",
+      "type": "max_length",
+      "target": "footprint",
+      "field": "Value",
       "max_characters": 18,
-      "collision_scope": "loaded_libraries",
       "severity": "warning",
       "save_behavior": "advisory"
     }
@@ -153,13 +161,24 @@ block_save
 
 Starter example policies live in `examples/policies/`.
 
-These files are placeholders for likely policy families, not enabled defaults:
+These files are disabled-by-default examples for likely policy families:
 
 - `minimal-library-policy.json`
 - `procurement-fields-policy.json`
 - `fab-readability-policy.json`
 - `datasheet-link-policy.json`
 - `manufacturer-part-policy.json`
+
+The GUI loads the same starter policies from bundled application resources so the Audit and Rules tab can show them outside a source checkout.
+
+Supported first-pass rule types:
+
+```text
+required_field
+alias_field_name
+regex_check
+max_length
+```
 
 ## Regex Inspection
 

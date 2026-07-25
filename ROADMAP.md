@@ -23,6 +23,7 @@
 - Add status-bar counts for loaded libraries, items, issues, and pending changes.
 - Add table filtering for issues, pending changes, and selected libraries.
 - Add tests around table-model edit and check-state behavior.
+- Run loaded policies against mock table data and display generated issues.
 - Mirror relevant KiCad Import Assistant profile concepts in the KMFDM Configuration dialog.
 
 ## After the GUI Slice Feels Right
@@ -30,7 +31,7 @@
 - Add KiCad S-expression parser fixtures and parser tests.
 - Implement read-only scanning for `.kicad_sym` and `.pretty` libraries.
 - Connect scanned KiCad data to the existing table model.
-- Add the first user-defined policy schema.
+- Add policy-file selection and enable/disable controls.
 - Expand Help policy guidance after policy behavior exists.
 - Add audit rules for required fields, aliases, regex compliance, and Fab Value length.
 

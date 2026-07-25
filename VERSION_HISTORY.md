@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added the first versioned policy schema and JSON loader.
+- Converted starter policy examples into disabled-by-default parseable policies.
+- Bundled starter policy examples as application resources for packaged runs.
+- Added tests for policy example loading, bundled policy loading, schema versions, and regex validation.
+- Replaced the Audit and Rules placeholder with a read-only starter policy browser.
 - Made the Configuration layout placeholder display-only instead of a selectable layout option.
 - Replaced editable-looking details/inspector text boxes with framed read-only information panels.
 - Shortened layout profile details to the description and core path templates.

@@ -40,6 +40,7 @@ from kmfdm.config import (
     LibrarySelection,
     WorkspaceConfig,
     load_bundled_layout_profiles,
+    load_bundled_policy_profiles,
     load_workspace_config,
     matching_symbol_library_for_footprint,
     save_workspace_config,
@@ -262,7 +263,7 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(self._library_tab(mock_symbol_items()), "Symbols")
         tabs.addTab(self._library_tab(mock_footprint_items()), "Footprints")
-        tabs.addTab(QLabel("Audit and Rules prototype placeholder"), "Audit and Rules")
+        tabs.addTab(self._audit_rules_tab(), "Audit and Rules")
         tabs.addTab(QLabel("Changes prototype placeholder"), "Changes")
         tabs.addTab(QLabel("History prototype placeholder"), "History")
 
@@ -363,6 +364,53 @@ class MainWindow(QMainWindow):
         layout.addWidget(table, 4)
         layout.addWidget(inspector, 1)
         return widget
+
+    def _audit_rules_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+
+        policies = load_bundled_policy_profiles()
+        policy_list = QListWidget()
+        policy_list.setMinimumWidth(280)
+        details = ReadOnlyInfoPanel("Select a policy to inspect it.")
+
+        for policy in policies:
+            item = QListWidgetItem(f"{policy.name} ({len(policy.rules)} rules)")
+            item.setData(Qt.ItemDataRole.UserRole, policy)
+            policy_list.addItem(item)
+
+        policy_list.currentItemChanged.connect(lambda item: self._show_policy_details(item, details))
+        if policy_list.count():
+            policy_list.setCurrentRow(0)
+
+        layout.addWidget(policy_list, 1)
+        layout.addWidget(details, 3)
+        return widget
+
+    def _show_policy_details(self, item: QListWidgetItem | None, details: ReadOnlyInfoPanel) -> None:
+        if item is None:
+            details.setPlainText("Select a policy to inspect it.")
+            return
+
+        policy = item.data(Qt.ItemDataRole.UserRole)
+        lines = [
+            policy.name,
+            policy.description,
+            "",
+            f"ID: {policy.profile_id}",
+            f"Enabled by default: {'yes' if policy.enabled_by_default else 'no'}",
+            f"Rules: {len(policy.rules)}",
+        ]
+        if policy.rules:
+            lines.extend(["", "Rule summary"])
+            lines.extend(f"- {rule.name} [{rule.rule_type}]" for rule in policy.rules)
+        lines.extend(
+            [
+                "",
+                "These starter policies are loaded for inspection only. Policy editing and library auditing come in later slices.",
+            ]
+        )
+        details.setPlainText("\n".join(lines))
 
     def _show_cell(self, index: QModelIndex, model: ComponentTableModel, inspector: ReadOnlyInfoPanel) -> None:
         if not index.isValid():
