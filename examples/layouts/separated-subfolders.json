@@ -1,0 +1,17 @@
+{
+  "layout_profile_version": 1,
+  "id": "separated-subfolders",
+  "name": "Separated subfolders",
+  "description": "Each library family has dedicated symbol, footprint, and model subfolders.",
+  "paths": {
+    "footprint_library": "{library_root}/{library_key}/footprints/{library_key}.pretty",
+    "symbol_library": "{library_root}/{library_key}/symbols/{library_key}.kicad_sym",
+    "model_directory": "{library_root}/{library_key}/models"
+  },
+  "discovery": {
+    "symbol_match": [
+      "{library_root}/{library_key}/symbols/{library_key}.kicad_sym"
+    ],
+    "model_extensions": [".step", ".stp", ".wrl"]
+  }
+}

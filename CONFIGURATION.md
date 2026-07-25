@@ -30,6 +30,62 @@ Initial fields:
 
 When a footprint library is added, KMFDM looks for an exact matching symbol library in the `.pretty` folder first, then beside it. For example, `_testCONN.pretty` can auto-add `_testCONN.pretty/_testCONN.kicad_sym` or `_testCONN.kicad_sym`.
 
+## Library Layout Profiles
+
+Library layout profiles describe where symbols, footprints, and models live relative to a selected library root.
+
+These profiles should be shared in concept with KiCad Import Assistant so users do not have to describe the same local library structure twice.
+
+Layout profiles answer questions such as:
+
+- Where is a footprint library for a given library key?
+- Where is the matching symbol library?
+- Where should 3D models be found or written?
+- Which symbol-library paths should be checked when a footprint library is selected?
+
+Example layout profiles live in `examples/layouts/`:
+
+- `flat-contained-symbols.json`
+- `separated-subfolders.json`
+- `split-type-roots.json`
+
+The initial built-in candidates are:
+
+```text
+flat-contained-symbols
+  {library_root}/{library_key}.pretty/
+    {library_key}.kicad_sym
+    *.kicad_mod
+    *.step / *.stp
+
+separated-subfolders
+  {library_root}/{library_key}/symbols/{library_key}.kicad_sym
+  {library_root}/{library_key}/footprints/{library_key}.pretty
+  {library_root}/{library_key}/models/
+
+split-type-roots
+  {library_root}/Symbols/{library_key}.kicad_sym
+  {library_root}/Footprints/{library_key}.pretty
+  {library_root}/Models/{library_key}/
+```
+
+The future setup wizard should let users choose one of these layouts, customize path templates, or start from autodetected suggestions.
+
+## First-Run and Repair Setup
+
+KMFDM should eventually offer a guided setup when local configuration is missing, invalid, or intentionally recreated.
+
+Setup goals:
+
+- Create `.kmfdm-workspace.json` from executable-shipped defaults and user choices.
+- Choose or customize a library layout profile.
+- Select a custom library root.
+- Configure the KiCad path variable.
+- Rebuild symbol and footprint library lists from a selected root folder.
+- Optionally import compatible KIA settings after user confirmation.
+
+Autodetection should be advisory. It should scan a selected root folder, identify likely layout patterns, report confidence, and let the user accept, customize, or ignore the suggestion.
+
 ## Policy Concepts
 
 Policies may define:

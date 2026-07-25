@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added library layout profile examples for flat-contained, separated-subfolder, and split-root structures.
+- Added configuration docs for first-run and repair guided setup.
+- Added future roadmap item for layout autodetection from a selected library root.
 - Added README disclosure that KMFDM is vibe coded with AI assistance.
 - Added README reference to the related KiCad Import Assistant project.
 - Moved the Megalomaniacal inside joke into project documentation instead of the GitHub short description.

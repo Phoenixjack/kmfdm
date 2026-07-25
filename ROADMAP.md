@@ -14,6 +14,8 @@
 
 - Add the KMFDM icon and early application screenshots to `README.md`.
 - Expand persisted workspace settings beyond the first `.kmfdm-workspace.json` foundation.
+- Define built-in library layout profiles for flat-contained, separated-subfolder, and split-root layouts.
+- Add first-run and repair guided setup for creating or recreating local workspace configuration.
 - Add library root discovery and include/exclude controls for symbol and footprint libraries.
 - Build out the Changes tab with mock change groups and per-change inclusion controls.
 - Build the selective preview dialog using mock changes.
@@ -26,6 +28,7 @@
 
 ## After the GUI Slice Feels Right
 
+- Add a read-only layout scanner that can suggest likely layout profiles from a selected library root.
 - Add KiCad S-expression parser fixtures and parser tests.
 - Implement read-only scanning for `.kicad_sym` and `.pretty` libraries.
 - Connect scanned KiCad data to the existing table model.
