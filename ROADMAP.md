@@ -12,6 +12,7 @@
 
 ## Near-Term
 
+- Add the KMFDM icon and early application screenshots to `README.md`.
 - Expand persisted workspace settings beyond the first `.kmfdm-workspace.json` foundation.
 - Add library root discovery and include/exclude controls for symbol and footprint libraries.
 - Build out the Changes tab with mock change groups and per-change inclusion controls.

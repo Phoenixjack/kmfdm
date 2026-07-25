@@ -1,5 +1,12 @@
 # Version History
 
+## Unreleased
+
+- Added README disclosure that KMFDM is vibe coded with AI assistance.
+- Added README reference to the related KiCad Import Assistant project.
+- Moved the Megalomaniacal inside joke into project documentation instead of the GitHub short description.
+- Added a roadmap item for README icon and screenshot placement.
+
 ## v0.0.4 - 2026-07-25
 
 - Added the KMFDM multi-size icon as a package resource.

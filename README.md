@@ -4,7 +4,17 @@ KiCad Management of Field-Defined Metadata.
 
 KMFDM is a desktop metadata auditor and bulk editor for native KiCad symbol and footprint libraries.
 
-The project is intentionally separate from the KiCad Import Assistant. The importer gets downloaded assets into controlled libraries; KMFDM helps keep those libraries consistent, readable, and maintainable afterward.
+Internal motto: megalomaniacal, and inherently better than the best.
+
+## Related Project
+
+KMFDM is intentionally separate from [KiCad Import Assistant](https://github.com/Phoenixjack/kicad-import-assistant), but the tools are related.
+
+KiCad Import Assistant gets downloaded assets into controlled libraries. KMFDM helps keep those libraries consistent, readable, and maintainable afterward.
+
+## Development Disclosure
+
+This project is vibe coded with AI assistance. It reflects the maintainer's goals, testing, review, and direction, but it should not be read as a claim of traditional solo software authorship or professional software-engineering expertise.
 
 ## Status
 
