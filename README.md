@@ -4,7 +4,7 @@ KiCad Management of Field-Defined Metadata.
 
 KMFDM is a desktop metadata auditor and bulk editor for native KiCad symbol and footprint libraries.
 
-Internal motto: megalomaniacal, and inherently better than the best.
+Internal motto: It's not conceit - merely megalomaniacal - to say that this tool is inherently better than the best.
 
 ## Related Project
 
