@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Clearly label policy provenance for policy-generated cell issues in tooltips and inspectors.
 - Connected mock policy findings to matching Symbols and Footprints table cell issue states.
 - Expanded issue tooltips and inspectors with policy detail and rule names.
 - Added a read-only policy audit service for mock library rows.

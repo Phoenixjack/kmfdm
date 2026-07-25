@@ -501,6 +501,8 @@ class MainWindow(QMainWindow):
                 lines.extend(["", "Issues"])
                 for issue in cell.issues:
                     lines.append(f"{issue.severity.value.upper()}: {issue.title}")
+                    if issue.policy_name:
+                        lines.append(f"Policy: {issue.policy_name}")
                     if issue.rule_name:
                         lines.append(f"Rule: {issue.rule_name}")
                     if issue.detail:
@@ -870,9 +872,10 @@ def attach_policy_findings_to_mock_items(
 
         issue = Issue(
             severity=IssueSeverity(finding.severity),
-            title=finding.rule_name,
-            detail=f"{finding.message} Policy: {finding.policy_name}.",
+            title=finding.message,
+            detail="",
             rule_name=finding.rule_name,
+            policy_name=finding.policy_name,
         )
         if issue not in cell.issues:
             cell.issues.append(issue)

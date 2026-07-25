@@ -23,3 +23,24 @@ def test_cell_state_reports_issue_tooltip() -> None:
     assert not cell.is_changed
     assert "WARNING: Missing datasheet" in cell.tooltip_text()
     assert "Datasheet field is empty." in cell.tooltip_text()
+
+
+def test_cell_state_reports_policy_issue_provenance() -> None:
+    cell = CellState(
+        original_value="MPN123",
+        working_value="MPN123",
+        issues=[
+            Issue(
+                IssueSeverity.WARNING,
+                "Field 'MPN' matches preferred field 'Manufacturer Part Number'.",
+                "",
+                rule_name="Manufacturer part-number aliases",
+                policy_name="Manufacturer Part Policy",
+            )
+        ],
+    )
+
+    tooltip = cell.tooltip_text()
+
+    assert "Policy: Manufacturer Part Policy" in tooltip
+    assert "Rule: Manufacturer part-number aliases" in tooltip

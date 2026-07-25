@@ -35,6 +35,7 @@ class Issue:
     title: str
     detail: str
     rule_name: str | None = None
+    policy_name: str | None = None
 
 
 @dataclass
@@ -72,6 +73,8 @@ class CellState:
             issue_lines = ["Issues:"]
             for issue in self.issues:
                 issue_lines.append(f"{issue.severity.value.upper()}: {issue.title}")
+                if issue.policy_name:
+                    issue_lines.append(f"Policy: {issue.policy_name}")
                 if issue.rule_name:
                     issue_lines.append(f"Rule: {issue.rule_name}")
                 if issue.detail:

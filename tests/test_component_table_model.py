@@ -48,7 +48,9 @@ def test_policy_finding_attaches_to_matching_mock_cell() -> None:
 
     tps_mpn = symbol_items[0].cells["MPN"]
     assert any(issue.rule_name == "Manufacturer part-number aliases" for issue in tps_mpn.issues)
+    assert any(issue.policy_name == "Manufacturer Part Policy" for issue in tps_mpn.issues)
     assert "Manufacturer part-number aliases" in tps_mpn.tooltip_text()
+    assert "Policy: Manufacturer Part Policy" in tps_mpn.tooltip_text()
 
 
 def test_missing_field_policy_finding_does_not_create_mock_cell() -> None:
