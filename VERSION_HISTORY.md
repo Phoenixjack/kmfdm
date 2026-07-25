@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Made the Configuration layout placeholder display-only instead of a selectable layout option.
+- Replaced editable-looking details/inspector text boxes with framed read-only information panels.
+- Shortened layout profile details to the description and core path templates.
 - Added a Configuration dialog details panel for selected library layout profiles.
 - Added startup setup detection for missing, unreadable, or layout-less workspace configuration.
 - Require a library layout selection before accepting setup-required Configuration dialogs.

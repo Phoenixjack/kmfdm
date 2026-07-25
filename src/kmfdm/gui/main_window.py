@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -24,7 +25,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QStyle,
     QStyledItemDelegate,
@@ -222,6 +222,32 @@ class CenteredCheckBoxDelegate(QStyledItemDelegate):
         style.drawControl(QStyle.ControlElement.CE_CheckBox, checkbox_option, painter, option.widget)
 
 
+class ReadOnlyInfoPanel(QFrame):
+    def __init__(self, text: str = "") -> None:
+        super().__init__()
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setObjectName("readOnlyInfoPanel")
+        self.setStyleSheet(
+            "#readOnlyInfoPanel {"
+            "background-color: #efefef;"
+            "border: 1px solid #a0a0a0;"
+            "}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        self.label = QLabel()
+        self.label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.label.setTextFormat(Qt.TextFormat.PlainText)
+        self.label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.label.setWordWrap(True)
+        layout.addWidget(self.label)
+        self.setPlainText(text)
+
+    def setPlainText(self, text: str) -> None:
+        self.label.setText(text)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -329,10 +355,8 @@ class MainWindow(QMainWindow):
         table.setItemDelegateForColumn(0, CenteredCheckBoxDelegate(table))
         table.resizeColumnsToContents()
         table.setColumnWidth(0, 72)
-        inspector = QPlainTextEdit()
-        inspector.setReadOnly(True)
+        inspector = ReadOnlyInfoPanel("Select a cell to inspect it.")
         inspector.setMinimumWidth(320)
-        inspector.setPlainText("Select a cell to inspect it.")
 
         table.selectionModel().currentChanged.connect(lambda index: self._show_cell(index, model, inspector))
 
@@ -340,7 +364,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(inspector, 1)
         return widget
 
-    def _show_cell(self, index: QModelIndex, model: ComponentTableModel, inspector: QPlainTextEdit) -> None:
+    def _show_cell(self, index: QModelIndex, model: ComponentTableModel, inspector: ReadOnlyInfoPanel) -> None:
         if not index.isValid():
             return
 
@@ -471,6 +495,9 @@ class ConfigurationDialog(QDialog):
         self.layout_profiles = _load_configuration_layout_profiles()
         self.layout_profile_combo = QComboBox()
         self.layout_profile_combo.addItem("No layout selected", "")
+        placeholder_item = self.layout_profile_combo.model().item(0)
+        if placeholder_item is not None:
+            placeholder_item.setEnabled(False)
         for profile in self.layout_profiles:
             self.layout_profile_combo.addItem(f"{profile.name} ({profile.profile_id})", profile.profile_id)
 
@@ -481,8 +508,7 @@ class ConfigurationDialog(QDialog):
         self.layout_profile_combo.currentIndexChanged.connect(self._update_layout_profile_details)
         form_layout.addRow("Library layout", self.layout_profile_combo)
 
-        self.layout_profile_details = QPlainTextEdit()
-        self.layout_profile_details.setReadOnly(True)
+        self.layout_profile_details = ReadOnlyInfoPanel()
         self.layout_profile_details.setMaximumHeight(150)
         form_layout.addRow("Layout details", self.layout_profile_details)
         self._update_layout_profile_details()
@@ -596,20 +622,11 @@ class ConfigurationDialog(QDialog):
         self.layout_profile_details.setPlainText(
             "\n".join(
                 [
-                    f"Name: {profile.name}",
-                    f"ID: {profile.profile_id}",
-                    "",
                     profile.description,
                     "",
-                    "Paths",
                     f"Footprints: {profile.paths.footprint_library}",
                     f"Symbols: {profile.paths.symbol_library}",
                     f"Models: {profile.paths.model_directory}",
-                    "",
-                    "Symbol match checks",
-                    *[f"- {path}" for path in profile.discovery.symbol_match],
-                    "",
-                    f"Model extensions: {', '.join(profile.discovery.model_extensions)}",
                 ]
             )
         )
