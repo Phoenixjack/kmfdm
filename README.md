@@ -10,6 +10,10 @@ The project is intentionally separate from the KiCad Import Assistant. The impor
 
 Early bootstrap. The first development slice is a PySide6 mock-data GUI prototype before real KiCad parsing is attached.
 
+## Icon
+
+The application icon is stored as a multi-size ICO package resource and applied to the PySide6 application and main window. On Windows, KMFDM also sets an application user-model ID so the title bar and taskbar can use the KMFDM icon instead of the Python launcher icon.
+
 ## Planned MVP
 
 - Symbols and Footprints data-grid views.

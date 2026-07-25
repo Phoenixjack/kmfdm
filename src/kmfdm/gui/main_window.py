@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import ctypes
+import os
 import sys
 from dataclasses import dataclass
+from importlib import resources
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRect, Qt
-from PySide6.QtGui import QAction, QColor, QFont
+from PySide6.QtGui import QAction, QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -37,6 +40,9 @@ from kmfdm.config import (
     save_workspace_config,
 )
 from kmfdm.models import CellState, ChangeKind, ChangeSource, Issue, IssueSeverity
+
+
+WINDOWS_APP_ID = "Phoenixjack.KMFDM"
 
 
 @dataclass
@@ -214,6 +220,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("KMFDM")
+        self.setWindowIcon(kmfdm_icon())
         self.resize(1200, 760)
         self.workspace_config = load_workspace_config()
 
@@ -568,7 +575,24 @@ def mock_footprint_items() -> list[MockItem]:
 
 
 def run() -> int:
+    configure_windows_app_id()
     app = QApplication(sys.argv)
+    app.setWindowIcon(kmfdm_icon())
     window = MainWindow()
     window.show()
     return app.exec()
+
+
+def kmfdm_icon() -> QIcon:
+    icon_path = resources.files("kmfdm").joinpath("resources", "kmfdm.ico")
+    return QIcon(str(icon_path))
+
+
+def configure_windows_app_id() -> None:
+    if os.name != "nt":
+        return
+
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(WINDOWS_APP_ID)
+    except Exception:
+        pass

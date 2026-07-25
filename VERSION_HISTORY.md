@@ -1,7 +1,10 @@
 # Version History
 
-## Unreleased
+## v0.0.4 - 2026-07-25
 
+- Added the KMFDM multi-size icon as a package resource.
+- Applied the KMFDM icon to the PySide6 application and main window.
+- Added a Windows application user-model ID so the taskbar can show the KMFDM icon.
 - Fixed footprint-library symbol autodetection for layouts where the matching `.kicad_sym` file lives inside the `.pretty` folder.
 - Reserved a `kia_interop` workspace config section for future KIA/KMFDM config mapping.
 - Moved the footprint-library section above the symbol-library section in the Configuration dialog.
