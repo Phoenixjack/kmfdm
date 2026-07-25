@@ -71,6 +71,8 @@ split-type-roots
 
 The future setup wizard should let users choose one of these layouts, customize path templates, or start from autodetected suggestions.
 
+The first code foundation for layout profiles is a parser/validator for the example JSON files. GUI selection, path-template rendering, and filesystem scanning are intentionally separate later steps.
+
 ## First-Run and Repair Setup
 
 KMFDM should eventually offer a guided setup when local configuration is missing, invalid, or intentionally recreated.
