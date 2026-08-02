@@ -7,8 +7,12 @@
 - Add a basic color legend so visual states are discoverable.
 - Add bottom-window command buttons for save, revert, and exit workflows.
 - Add menu-accessible mock Configuration and Preferences dialogs.
-- Add placeholder Help menu policy guidance.
+- Add Help menu policy guidance for the starter Audit workflow.
 - Add starter example policy files.
+- Add table controls for filtering visible mock rows by source library and visible columns.
+- Drive the table placeholder rows from saved Configuration libraries instead of hardcoded demo libraries.
+- Add read-only KiCad S-expression scanning for configured `.kicad_sym` and `.pretty` libraries.
+- Connect scanned KiCad symbol and footprint metadata to the existing table model.
 
 ## Near-Term
 
@@ -21,23 +25,25 @@
 - Build the selective preview dialog using mock changes.
 - Build a prototype History tab for `.kmfdm-history.jsonl` entries.
 - Add status-bar counts for loaded libraries, items, issues, and pending changes.
-- Add table filtering for issues, pending changes, and selected libraries.
+- Add table filtering for issues and pending changes.
+- Expand source-library and column filters after real KiCad scans replace mock data.
 - Add tests around table-model edit and check-state behavior.
-- Add issue-filter controls that use policy-generated table issue states.
+- Add issue-filter controls that use audit-generated table issue states.
 - Mirror relevant KiCad Import Assistant profile concepts in the KMFDM Configuration dialog.
 
 ## After the GUI Slice Feels Right
 
-- Add KiCad S-expression parser fixtures and parser tests.
-- Implement read-only scanning for `.kicad_sym` and `.pretty` libraries.
-- Connect scanned KiCad data to the existing table model.
-- Run loaded policies against scanned KiCad library data.
-- Add policy-file selection and enable/disable controls.
+- Persist Audit tab policy settings across launches.
+- Add policy-file selection for workspace-specific policy profiles.
 - Expand Help policy guidance after policy behavior exists.
-- Add audit rules for required fields, aliases, regex compliance, and Fab Value length.
+- Add more user-adjustable audit rules after the starter scanned-data policy flow is validated.
+- Connect the Rule Editor dialog to real policy mutation and workspace persistence.
+- Add a regex-builder assistant and stronger live rule preview against selected library rows.
+- Add wildcard and regex applicability controls for selected fields and libraries.
 
 ## Later
 
+- Add an optional lower-right symbol/footprint preview panel using KiCad CLI SVG export when a KiCad CLI path is configured or discoverable.
 - Add a read-only layout scanner that can suggest likely layout profiles from a selected library root.
 - Add user-customizable layout profile editing after bundled starter profiles are proven useful.
 - Add safe-save staging, backups, validation, and rollback.

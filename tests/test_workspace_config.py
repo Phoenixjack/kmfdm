@@ -3,6 +3,10 @@ import json
 from kmfdm.config import (
     LibrarySelection,
     WorkspaceConfig,
+    candidate_symbol_libraries_for_footprint,
+    create_symbol_library_for_footprint,
+    default_workspace_config_path,
+    default_symbol_library_for_footprint,
     load_workspace_config,
     matching_symbol_library_for_footprint,
     save_workspace_config,
@@ -93,7 +97,11 @@ def test_matching_symbol_library_for_footprint_prefers_contained_match(tmp_path)
     contained_symbol_library.write_text("(kicad_symbol_lib)\n", encoding="utf-8")
     sibling_symbol_library.write_text("(kicad_symbol_lib)\n", encoding="utf-8")
 
-    assert matching_symbol_library_for_footprint(footprint_library) == contained_symbol_library
+    assert candidate_symbol_libraries_for_footprint(footprint_library) == [
+        contained_symbol_library,
+        sibling_symbol_library,
+    ]
+    assert matching_symbol_library_for_footprint(footprint_library) is None
 
 
 def test_matching_symbol_library_for_footprint_requires_exact_sibling_match(tmp_path) -> None:
@@ -103,3 +111,52 @@ def test_matching_symbol_library_for_footprint_requires_exact_sibling_match(tmp_
     near_miss.write_text("(kicad_symbol_lib)\n", encoding="utf-8")
 
     assert matching_symbol_library_for_footprint(footprint_library) is None
+
+
+def test_candidate_symbol_libraries_for_footprint_finds_multiple_contained_files(tmp_path) -> None:
+    footprint_library = tmp_path / "Connectors.pretty"
+    exact_symbol_library = footprint_library / "Connectors.kicad_sym"
+    extra_symbol_library = footprint_library / "Alternate.kicad_sym"
+    footprint_library.mkdir()
+    exact_symbol_library.write_text("(kicad_symbol_lib)\n", encoding="utf-8")
+    extra_symbol_library.write_text("(kicad_symbol_lib)\n", encoding="utf-8")
+
+    assert candidate_symbol_libraries_for_footprint(footprint_library) == [
+        exact_symbol_library,
+        extra_symbol_library,
+    ]
+    assert matching_symbol_library_for_footprint(footprint_library) is None
+
+
+def test_default_symbol_library_for_footprint_uses_contained_flat_layout_name(tmp_path) -> None:
+    footprint_library = tmp_path / "Connectors.pretty"
+
+    assert default_symbol_library_for_footprint(footprint_library) == footprint_library / "Connectors.kicad_sym"
+
+
+def test_create_symbol_library_for_footprint_writes_empty_kicad_symbol_library(tmp_path) -> None:
+    footprint_library = tmp_path / "Connectors.pretty"
+
+    symbol_library = create_symbol_library_for_footprint(footprint_library)
+
+    assert symbol_library == footprint_library / "Connectors.kicad_sym"
+    assert symbol_library.read_text(encoding="utf-8") == (
+        "(kicad_symbol_lib\n"
+        "  (version 20231120)\n"
+        "  (generator \"kmfdm\")\n"
+        "  (generator_version \"0.1.0\")\n"
+        ")\n"
+    )
+
+
+def test_default_workspace_config_path_finds_project_root_from_venv_script_path(tmp_path) -> None:
+    project_root = tmp_path / "kmfdm"
+    scripts_dir = project_root / ".venv" / "Scripts"
+    package_dir = project_root / "src" / "kmfdm"
+    scripts_dir.mkdir(parents=True)
+    package_dir.mkdir(parents=True)
+    (project_root / "pyproject.toml").write_text("[project]\nname = \"kmfdm\"\n", encoding="utf-8")
+
+    config_path = default_workspace_config_path(scripts_dir / "kmfdm.exe")
+
+    assert config_path == project_root / ".kmfdm-workspace.json"

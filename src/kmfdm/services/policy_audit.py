@@ -15,6 +15,19 @@ class AuditItem:
 
 
 @dataclass(frozen=True)
+class AuditContext:
+    existing_footprints: set[str]
+    existing_symbols: set[str]
+
+    @classmethod
+    def from_items(cls, items: list[AuditItem]) -> AuditContext:
+        return cls(
+            existing_footprints=_existing_item_names(items, "footprint"),
+            existing_symbols=_existing_item_names(items, "symbol"),
+        )
+
+
+@dataclass(frozen=True)
 class PolicyFinding:
     policy_id: str
     policy_name: str
@@ -37,13 +50,15 @@ class PolicyFinding:
 def audit_items_against_policies(
     items: list[AuditItem],
     policies: list[PolicyProfile],
+    context: AuditContext | None = None,
 ) -> list[PolicyFinding]:
+    context = context or AuditContext.from_items(items)
     findings: list[PolicyFinding] = []
     for policy in policies:
         for rule in policy.rules:
             for item in items:
                 if _rule_applies_to_item(rule, item):
-                    findings.extend(_audit_item_against_rule(item, policy, rule))
+                    findings.extend(_audit_item_against_rule(item, policy, rule, context))
     return findings
 
 
@@ -55,6 +70,7 @@ def _audit_item_against_rule(
     item: AuditItem,
     policy: PolicyProfile,
     rule: PolicyRule,
+    context: AuditContext,
 ) -> list[PolicyFinding]:
     if rule.rule_type == "required_field":
         return _audit_required_field(item, policy, rule)
@@ -64,6 +80,8 @@ def _audit_item_against_rule(
         return _audit_regex_check(item, policy, rule)
     if rule.rule_type == "max_length":
         return _audit_max_length(item, policy, rule)
+    if rule.rule_type == "reference_exists":
+        return _audit_reference_exists(item, policy, rule, context)
     return []
 
 
@@ -157,6 +175,38 @@ def _audit_max_length(
     ]
 
 
+def _audit_reference_exists(
+    item: AuditItem,
+    policy: PolicyProfile,
+    rule: PolicyRule,
+    context: AuditContext,
+) -> list[PolicyFinding]:
+    field = str(rule.parameters["field"])
+    value = item.fields.get(field, "")
+    if not value.strip():
+        return []
+
+    referenced_item_type = str(rule.parameters["referenced_item_type"])
+    reference_name = _reference_item_name(value)
+    existing_names = (
+        context.existing_footprints
+        if referenced_item_type == "footprint"
+        else context.existing_symbols
+    )
+    if reference_name.casefold() in existing_names:
+        return []
+
+    return [
+        _finding(
+            item,
+            policy,
+            rule,
+            field,
+            f"Referenced {referenced_item_type} '{value}' was not found.",
+        )
+    ]
+
+
 def _regex_passes(value: str, pattern: str, mode: str) -> bool:
     compiled = re.compile(pattern)
     if mode == "must_match":
@@ -166,6 +216,24 @@ def _regex_passes(value: str, pattern: str, mode: str) -> bool:
     if mode == "contains_match":
         return compiled.search(value) is not None
     return False
+
+
+def _reference_item_name(value: str) -> str:
+    return value.split(":")[-1].strip()
+
+
+def _existing_item_names(items: list[AuditItem], item_type: str) -> set[str]:
+    names = {
+        item.name.casefold()
+        for item in items
+        if item.item_type == item_type
+    }
+    names.update(
+        f"{item.library}:{item.name}".casefold()
+        for item in items
+        if item.item_type == item_type
+    )
+    return names
 
 
 def _finding(

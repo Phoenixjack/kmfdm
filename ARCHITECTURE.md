@@ -26,7 +26,7 @@ Use PySide6 with Qt model/view architecture.
 Primary widgets:
 
 - `QMainWindow` for the application shell.
-- `QTabWidget` for Symbols, Footprints, Audit and Rules, Changes, and History.
+- `QTabWidget` for Symbols, Footprints, Audit, Changes, and History.
 - `QTableView` for library item grids.
 - Custom `QAbstractTableModel` classes for cell state and table behavior.
 - Inspector panels for selected cell details.
@@ -49,6 +49,8 @@ class CellState:
 ```
 
 The table model should expose display text, edit values, backgrounds, fonts, tooltips, icons, checkboxes, and editability through Qt roles.
+
+The Audit tab should configure policy applicability and severity, while Symbols and Footprints remain the main inspection views for individual violations. Audit-level counts should stay close to the installed-library applicability list, and detailed findings should attach to table cells and inspectors where the user is already reviewing library data.
 
 ## Change Model
 
@@ -84,6 +86,8 @@ After a partial save:
 Use a proper S-expression parser with typed adapters for known KiCad constructs.
 
 Do not use regex against raw KiCad library files for parsing or writing. Regex is appropriate only after values have been parsed into fields.
+
+The first read-only scanner parses configured `.kicad_sym` files and `.pretty/*.kicad_mod` files into item-level metadata rows for the Symbols and Footprints tables. It extracts known metadata fields only; geometry, pins, pads, and graphics remain out of scope for the MVP.
 
 Writer goals:
 

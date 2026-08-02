@@ -29,7 +29,9 @@ Initial fields:
 
 `kia_interop` is reserved for future KiCad Import Assistant compatibility. It should leave room for copying or mapping compatible KIA private-data values such as library root, path variable, import destinations, schema profiles, and API provider settings without forcing KMFDM to share KIA's exact file format.
 
-When a footprint library is added, KMFDM looks for an exact matching symbol library in the `.pretty` folder first, then beside it. For example, `_testCONN.pretty` can auto-add `_testCONN.pretty/_testCONN.kicad_sym` or `_testCONN.kicad_sym`.
+When a footprint library is added, KMFDM looks for matching symbol libraries in the `.pretty` folder and beside it. For example, `_testCONN.pretty` can auto-add `_testCONN.pretty/_testCONN.kicad_sym` or `_testCONN.kicad_sym`.
+
+If no `.kicad_sym` file exists for the selected footprint library, KMFDM can create an empty contained symbol library named `{library_key}.kicad_sym` after user confirmation. If more than one candidate `.kicad_sym` file exists, KMFDM asks the user to choose the intended symbol library with a file picker.
 
 ## Library Layout Profiles
 
@@ -96,7 +98,7 @@ Autodetection is a back-burner feature. When added, it should be advisory: scan 
 
 ## Policy Concepts
 
-Policy files are versioned JSON documents. The first schema supports enough structure to load, validate, display policy intent, and run read-only checks against mock library rows. Real KiCad library auditing comes after the parser/scanner slice.
+Policy files are versioned JSON documents. The first schema supports enough structure to load, validate, display policy intent, and run read-only checks against scanned KiCad metadata.
 
 Policies may define:
 
@@ -105,11 +107,14 @@ Policies may define:
 - Alias mappings.
 - Regex compliance checks.
 - Maximum length checks.
+- Reference-exists checks, such as symbol Footprint fields pointing to known footprints.
 - Fab Value readability checks.
 - URL syntax checks.
 - Footprint description and keyword checks.
 - Severity.
 - Save behavior.
+- Per-policy applicability for Symbols, Footprints, or both.
+- Explicit per-library applicability.
 
 ## Severity
 
@@ -167,10 +172,13 @@ These files are disabled-by-default examples for likely policy families:
 - `procurement-fields-policy.json`
 - `fab-readability-policy.json`
 - `datasheet-link-policy.json`
+- `library-validation-policy.json`
 - `manufacturer-part-policy.json`
 
-The GUI loads the same starter policies from bundled application resources so the Audit and Rules tab can show them outside a source checkout.
-The Audit and Rules tab currently shows policy details and mock-data findings. Findings that map to visible mock table fields are also attached to those table cells, so the cell background, tooltip, and inspector can show the same issue context. These findings demonstrate rule behavior but do not yet scan or modify real KiCad files.
+The GUI loads the same starter policies from bundled application resources so the Audit tab can show them outside a source checkout.
+The Audit tab lets users adjust each policy's enabled state, apply-to-new-libraries behavior, symbol/footprint target, KiCad-style severity, and installed-library applicability. The installed-library table shows per-library violation counts for the selected policy. Symbols and Footprints remain the primary tabs for inspecting individual findings. Findings are attached to visible table cells, so the cell background, tooltip, and inspector show the same issue context.
+
+The starter library validation policy begins with GRAPHICS libraries unchecked in the Audit tab instead of using wildcard exemptions. Users can still opt those libraries into the policy manually. Wildcard and regex-based applicability controls are deferred until the basic policy workflow is proven.
 
 Supported first-pass rule types:
 
@@ -179,6 +187,7 @@ required_field
 alias_field_name
 regex_check
 max_length
+reference_exists
 ```
 
 ## Regex Inspection

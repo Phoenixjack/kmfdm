@@ -2,17 +2,41 @@
 
 ## Unreleased
 
+- Added source-library and visible-column filters above the mock Symbols and Footprints tables.
+- Added Select All and Select None commands to the mock table filter dropdowns.
+- Refresh Symbols and Footprints table filters after saving Configuration changes.
+- Replaced hardcoded demo table rows in the main UI with non-audited placeholders from enabled configured libraries.
+- Added a small S-expression parser for read-only KiCad library scanning.
+- Added read-only scanning for configured `.kicad_sym` symbol libraries and `.pretty/*.kicad_mod` footprint libraries.
+- Connected scanned KiCad metadata to the Symbols and Footprints table columns.
+- Simplified Library column and source-filter display with unique library aliases while keeping full source labels in the inspector.
+- Kept full scanned metadata available to audit rules even when fields are not visible table columns.
+- Added a starter library validation policy for datasheet, associated footprint, and 3D-model requirements.
+- Added an audit rule that checks whether a symbol Footprint field points to an existing footprint.
+- Added Audit tab controls for policy enablement, apply-to-new-libraries behavior, symbol/footprint target, severity, and explicit per-library applicability.
+- Defaulted GRAPHICS libraries out of the starter library validation policy through unchecked library applicability instead of wildcard exemptions.
+- Replaced the Audit tab findings list with per-library violation counts so Symbols and Footprints remain the primary finding inspection views.
+- Reworked the Audit tab into policy, policy-details/rules, and installed-library zones.
+- Added bundled SVG tab and library-type icons for Symbols, Footprints, History, and audit library rows.
+- Create an empty contained `.kicad_sym` file after confirmation when a newly added footprint library has no symbol library.
+- Ask the user to choose the intended symbol library when a newly added footprint library has multiple `.kicad_sym` candidates.
+- Added a per-library Violations column that shows `-` for libraries outside the selected policy and counts for applied libraries.
+- Added a presentation-only Rule Editor dialog with field selection, required/regex controls, regex quick help, and live regex pass/fail preview.
+- Added footprint 3D model extraction from KiCad `(model ...)` nodes.
+- Made development launcher settings resolve to the project workspace path instead of `.venv/Scripts`, with a legacy read fallback.
+- Added future roadmap note for optional KiCad CLI SVG-based symbol and footprint preview.
+- Added initial dev-tool configuration for `pytest-qt` and `ruff`.
 - Clearly label policy provenance for policy-generated cell issues in tooltips and inspectors.
 - Connected mock policy findings to matching Symbols and Footprints table cell issue states.
 - Expanded issue tooltips and inspectors with policy detail and rule names.
 - Added a read-only policy audit service for mock library rows.
-- Added Audit and Rules mock policy findings with finding detail display.
+- Added Audit mock policy findings with finding detail display.
 - Added tests for required-field, alias, regex, and max-length policy findings.
 - Added the first versioned policy schema and JSON loader.
 - Converted starter policy examples into disabled-by-default parseable policies.
 - Bundled starter policy examples as application resources for packaged runs.
 - Added tests for policy example loading, bundled policy loading, schema versions, and regex validation.
-- Replaced the Audit and Rules placeholder with a read-only starter policy browser.
+- Replaced the Audit placeholder with a read-only starter policy browser.
 - Made the Configuration layout placeholder display-only instead of a selectable layout option.
 - Replaced editable-looking details/inspector text boxes with framed read-only information panels.
 - Shortened layout profile details to the description and core path templates.

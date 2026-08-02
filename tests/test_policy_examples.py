@@ -30,6 +30,7 @@ def test_policy_examples_load_as_profiles() -> None:
     assert {profile.profile_id for profile in profiles} == {
         "datasheet-link-policy",
         "fab-readability-policy",
+        "library-validation-policy",
         "manufacturer-part-policy",
         "minimal-library-policy",
         "procurement-fields-policy",
@@ -39,6 +40,7 @@ def test_policy_examples_load_as_profiles() -> None:
     assert any(rule.rule_type == "regex_check" for profile in profiles for rule in profile.rules)
     assert any(rule.rule_type == "alias_field_name" for profile in profiles for rule in profile.rules)
     assert any(rule.rule_type == "max_length" for profile in profiles for rule in profile.rules)
+    assert any(rule.rule_type == "reference_exists" for profile in profiles for rule in profile.rules)
 
 
 def test_bundled_policy_profiles_load() -> None:
@@ -47,6 +49,7 @@ def test_bundled_policy_profiles_load() -> None:
     assert {profile.profile_id for profile in profiles} == {
         "datasheet-link-policy",
         "fab-readability-policy",
+        "library-validation-policy",
         "manufacturer-part-policy",
         "minimal-library-policy",
         "procurement-fields-policy",

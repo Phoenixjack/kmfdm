@@ -1,0 +1,46 @@
+{
+  "policy_schema_version": 1,
+  "id": "library-validation-policy",
+  "name": "Library Validation Policy",
+  "description": "Read-only validation checks for symbol and footprint linkage expectations.",
+  "enabled_by_default": false,
+  "rules": [
+    {
+      "id": "symbol-datasheet-required",
+      "name": "Symbols include a datasheet",
+      "type": "required_field",
+      "target": "symbol",
+      "field": "Datasheet",
+      "severity": "warning",
+      "save_behavior": "advisory"
+    },
+    {
+      "id": "symbol-footprint-required",
+      "name": "Symbols link an associated footprint",
+      "type": "required_field",
+      "target": "symbol",
+      "field": "Footprint",
+      "severity": "warning",
+      "save_behavior": "advisory"
+    },
+    {
+      "id": "symbol-footprint-exists",
+      "name": "Symbol footprint reference exists",
+      "type": "reference_exists",
+      "target": "symbol",
+      "field": "Footprint",
+      "referenced_item_type": "footprint",
+      "severity": "warning",
+      "save_behavior": "advisory"
+    },
+    {
+      "id": "footprint-3d-model-required",
+      "name": "Footprints include a 3D model",
+      "type": "required_field",
+      "target": "footprint",
+      "field": "3D Model",
+      "severity": "warning",
+      "save_behavior": "advisory"
+    }
+  ]
+}

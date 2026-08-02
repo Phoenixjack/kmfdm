@@ -14,6 +14,7 @@ VALID_POLICY_RULE_TYPES = {
     "alias_field_name",
     "regex_check",
     "max_length",
+    "reference_exists",
 }
 VALID_POLICY_TARGETS = {"symbol", "footprint", "both"}
 VALID_POLICY_SEVERITIES = {"info", "warning", "error"}
@@ -144,6 +145,11 @@ def _validate_rule_payload(rule_type: str, data: dict[str, Any]) -> None:
         max_characters = data.get("max_characters")
         if not isinstance(max_characters, int) or max_characters < 1:
             raise ValueError("Policy max_length rule requires a positive integer: max_characters")
+    elif rule_type == "reference_exists":
+        _required_string(data, "field")
+        referenced_item_type = _required_string(data, "referenced_item_type")
+        if referenced_item_type not in {"symbol", "footprint"}:
+            raise ValueError(f"Unsupported referenced item type: {referenced_item_type}")
 
 
 def _required_string(data: dict[str, Any], key: str) -> str:
