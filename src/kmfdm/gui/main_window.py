@@ -77,6 +77,12 @@ from kmfdm.config import (
     workspace_setup_issue,
 )
 from kmfdm.models import CellState, ChangeKind, ChangeSource, Issue, IssueSeverity
+from kmfdm.services.history import (
+    HistoryEvent,
+    append_history_events,
+    history_path_for_workspace,
+    load_history_events,
+)
 from kmfdm.services.kicad_scan import KiCadLibraryItem, ScanProgressCallback, scan_workspace_libraries
 from kmfdm.services.kicad_write import KiCadMetadataChange, KiCadWriteError, save_metadata_changes
 from kmfdm.services.policy_audit import AuditContext, AuditItem, PolicyFinding, audit_items_against_policies
@@ -123,6 +129,21 @@ class AuditPolicySettings:
     severity: str
     enabled_libraries: set[str] = field(default_factory=set)
     known_libraries: set[str] = field(default_factory=set)
+
+
+@dataclass(frozen=True)
+class PendingChange:
+    scope: str
+    library: str
+    item: str
+    field: str
+    original: str
+    current: str
+    included: bool
+    source: str = ""
+    detail: str = ""
+    source_path: Path | None = None
+    item_ref: MockItem | None = None
 
 
 class LibraryLoadWorker(QObject):
@@ -748,6 +769,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(kmfdm_icon())
         self.resize(1200, 760)
         self.workspace_config_path = workspace_config_path or default_workspace_config_path()
+        self.history_path = history_path_for_workspace(self.workspace_config_path)
         self.workspace_config = WorkspaceConfig()
         self.workspace_setup_message = ""
         self._load_workspace_config_for_launch()
@@ -785,8 +807,8 @@ class MainWindow(QMainWindow):
         tabs.addTab(symbol_tab, _ui_icon("symbol"), "Symbols")
         tabs.addTab(footprint_tab, _ui_icon("footprint"), "Footprints")
         tabs.addTab(self._audit_rules_tab(), _ui_icon("audit"), "Audit")
-        tabs.addTab(QLabel("Changes prototype placeholder"), _ui_icon("changes"), "Changes")
-        tabs.addTab(QLabel("History prototype placeholder"), _ui_icon("history"), "History")
+        self.changes_tab_index = tabs.addTab(self._changes_tab(), _ui_icon("changes"), "Changes")
+        tabs.addTab(self._history_tab(), _ui_icon("history"), "History")
         tabs.currentChanged.connect(lambda _index: self._update_action_buttons())
 
         edit_menu = self.menuBar().addMenu("&Edit")
@@ -974,6 +996,8 @@ class MainWindow(QMainWindow):
         table.selectionModel().currentChanged.connect(
             lambda index: self._show_cell(proxy_model.mapToSource(index), model, inspector)
         )
+        model.dataChanged.connect(lambda *_args: self._refresh_changes_tab())
+        model.modelReset.connect(self._refresh_changes_tab)
         _update_status_filter_counts(items, unsaved_filter, warning_filter, error_filter)
 
         left_layout.addLayout(filter_bar)
@@ -992,6 +1016,83 @@ class MainWindow(QMainWindow):
             warning_filter=warning_filter,
             error_filter=error_filter,
         )
+
+    def _changes_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        self.changes_table = QTableWidget(0, 8)
+        self.changes_table.setHorizontalHeaderLabels(
+            ["Apply", "Scope", "Library", "Item", "Field", "Original", "Current", "Source"]
+        )
+        self.changes_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.changes_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.changes_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.changes_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.changes_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.changes_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.changes_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+        self.changes_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        self.changes_table.verticalHeader().setVisible(False)
+        self.changes_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.changes_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.changes_table.currentCellChanged.connect(
+            lambda row, _column, _previous_row, _previous_column: self._show_pending_change(row)
+        )
+        self.changes_table.itemChanged.connect(self._changes_apply_item_changed)
+
+        self.changes_inspector = ReadOnlyInfoPanel("No pending changes.")
+        self.changes_inspector.setMinimumWidth(340)
+        layout.addWidget(self.changes_table, 3)
+        layout.addWidget(self.changes_inspector, 1)
+        self._pending_changes: list[PendingChange] = []
+        self._refresh_changes_tab()
+        return widget
+
+    def _history_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        history_side = QWidget()
+        history_layout = QVBoxLayout(history_side)
+        history_layout.setContentsMargins(0, 0, 0, 0)
+        refresh_row = QHBoxLayout()
+        self.history_summary_label = QLabel("")
+        refresh_button = QPushButton("Refresh")
+        refresh_button.clicked.connect(self._refresh_history_tab)
+        refresh_row.addWidget(self.history_summary_label)
+        refresh_row.addStretch()
+        refresh_row.addWidget(refresh_button)
+
+        self.history_table = QTableWidget(0, 7)
+        self.history_table.setHorizontalHeaderLabels(
+            ["Time", "Action", "Scope", "Library / Policy", "Item", "Field", "Status"]
+        )
+        self.history_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.history_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.history_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.history_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.history_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.history_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.history_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        self.history_table.verticalHeader().setVisible(False)
+        self.history_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.history_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.history_table.currentCellChanged.connect(
+            lambda row, _column, _previous_row, _previous_column: self._show_history_event(row)
+        )
+
+        history_layout.addLayout(refresh_row)
+        history_layout.addWidget(self.history_table)
+        self.history_inspector = ReadOnlyInfoPanel("No saved history events.")
+        self.history_inspector.setMinimumWidth(340)
+        layout.addWidget(history_side, 3)
+        layout.addWidget(self.history_inspector, 1)
+        self._history_events: list[HistoryEvent] = []
+        self._refresh_history_tab()
+        return widget
 
     def _apply_column_filter(
         self,
@@ -1039,6 +1140,7 @@ class MainWindow(QMainWindow):
             self._refresh_status_filter_counts(self.footprint_tab_state)
         if hasattr(self, "audit_library_table"):
             self._refresh_audit_violation_display()
+        self._refresh_changes_tab()
 
     def _refresh_configured_library_tables(self) -> None:
         self.symbol_items, self.footprint_items = configured_table_items_from_workspace(
@@ -1154,6 +1256,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "audit_policy_list"):
             self._show_policy_configuration(self.audit_policy_list.currentItem())
         self._update_action_buttons()
+        self._refresh_changes_tab()
 
     def _set_library_loading_message(self, message: str) -> None:
         if hasattr(self, "symbol_tab_state"):
@@ -1179,6 +1282,190 @@ class MainWindow(QMainWindow):
             tab_state.error_filter,
         )
         tab_state.proxy_model.refresh_status_filters()
+
+    def _refresh_changes_tab(self) -> None:
+        if not hasattr(self, "changes_table"):
+            return
+        if getattr(self, "_suppress_changes_refresh", False):
+            return
+
+        changes = _pending_metadata_changes("Symbol", self.symbol_items)
+        changes.extend(_pending_metadata_changes("Footprint", self.footprint_items))
+        self._pending_changes = changes
+        self._update_changes_tab_label(len(changes))
+        self.changes_table.blockSignals(True)
+        self.changes_table.setRowCount(len(changes))
+        for row, change in enumerate(changes):
+            apply_item = _read_only_table_item("")
+            apply_item.setFlags(apply_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            apply_item.setCheckState(Qt.CheckState.Checked if change.included else Qt.CheckState.Unchecked)
+            apply_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.changes_table.setItem(row, 0, apply_item)
+            values = [
+                change.scope,
+                change.library,
+                change.item,
+                change.field,
+                _table_value(change.original),
+                _table_value(change.current),
+                change.source,
+            ]
+            for column, value in enumerate(values, start=1):
+                self.changes_table.setItem(row, column, _read_only_table_item(value))
+        self.changes_table.blockSignals(False)
+
+        if not changes:
+            self.changes_inspector.setPlainText("No pending metadata changes.")
+            return
+        self.changes_table.selectRow(0)
+        self._show_pending_change(0)
+
+    def _update_changes_tab_label(self, change_count: int) -> None:
+        if not hasattr(self, "tabs") or not hasattr(self, "changes_tab_index"):
+            return
+        label = "Changes" if change_count == 0 else f"Changes ({change_count})"
+        if self.tabs.tabText(self.changes_tab_index) != label:
+            self.tabs.setTabText(self.changes_tab_index, label)
+
+    def _changes_apply_item_changed(self, item: QTableWidgetItem) -> None:
+        if item.column() != 0 or item.row() >= len(self._pending_changes):
+            return
+
+        change = self._pending_changes[item.row()]
+        if change.item_ref is None:
+            return
+        cell = change.item_ref.cells.get(change.field)
+        if cell is None:
+            return
+
+        cell.included_in_save = item.checkState() == Qt.CheckState.Checked
+        self._pending_changes[item.row()] = replace(change, included=cell.included_in_save)
+        if self.changes_table.currentRow() == item.row():
+            self._show_pending_change(item.row())
+        self._suppress_changes_refresh = True
+        try:
+            self._refresh_library_views_after_apply_change(change.item_ref)
+        finally:
+            self._suppress_changes_refresh = False
+        self._update_action_buttons()
+
+    def _refresh_library_views_after_apply_change(self, item: MockItem) -> None:
+        tab_state = self.symbol_tab_state if item in self.symbol_items else self.footprint_tab_state
+        tab_state.model.refresh_all()
+        self._refresh_status_filter_counts(tab_state)
+
+    def _checked_changes_have_metadata(self) -> bool:
+        return any(change.included for change in getattr(self, "_pending_changes", []))
+
+    def _show_pending_change(self, row: int) -> None:
+        if not hasattr(self, "_pending_changes") or row < 0 or row >= len(self._pending_changes):
+            if hasattr(self, "changes_inspector"):
+                self.changes_inspector.setPlainText("No pending change selected.")
+            return
+
+        change = self._pending_changes[row]
+        lines = [
+            f"Scope: {change.scope}",
+            f"Library: {change.library}",
+            f"Item: {change.item}",
+            f"Field: {change.field}",
+            "",
+            "Original",
+            change.original,
+            "",
+            "Current",
+            change.current,
+            "",
+            "Included in save" if change.included else "Excluded from save",
+        ]
+        if change.source:
+            lines.extend(["", "Source", change.source])
+        if change.source_path is not None:
+            lines.extend(["", "Source path", str(change.source_path)])
+        if change.detail:
+            lines.extend(["", "Detail", change.detail])
+        self.changes_inspector.setPlainText("\n".join(lines))
+
+    def _refresh_history_tab(self) -> None:
+        if not hasattr(self, "history_table"):
+            return
+
+        try:
+            events = list(reversed(load_history_events(self.history_path)))
+        except (OSError, json.JSONDecodeError) as error:
+            self._history_events = []
+            self.history_table.setRowCount(0)
+            self.history_summary_label.setText("History could not be loaded.")
+            self.history_inspector.setPlainText(str(error))
+            return
+
+        self._history_events = events
+        self.history_summary_label.setText(f"History events: {len(events)}")
+        self.history_table.blockSignals(True)
+        self.history_table.setRowCount(len(events))
+        for row, event in enumerate(events):
+            values = [
+                event.timestamp,
+                event.action,
+                event.scope,
+                event.library,
+                event.item,
+                event.field,
+                event.status,
+            ]
+            for column, value in enumerate(values):
+                self.history_table.setItem(row, column, _read_only_table_item(value))
+        self.history_table.blockSignals(False)
+
+        if not events:
+            self.history_inspector.setPlainText("No saved history events.")
+            return
+        self.history_table.selectRow(0)
+        self._show_history_event(0)
+
+    def _show_history_event(self, row: int) -> None:
+        if not hasattr(self, "_history_events") or row < 0 or row >= len(self._history_events):
+            if hasattr(self, "history_inspector"):
+                self.history_inspector.setPlainText("No history event selected.")
+            return
+
+        event = self._history_events[row]
+        lines = [
+            f"Time: {event.timestamp}",
+            f"Action: {event.action}",
+            f"Scope: {event.scope}",
+            f"Library / Policy: {event.library}",
+            f"Item: {event.item}",
+            f"Field: {event.field}",
+            f"Status: {event.status}",
+        ]
+        if event.source_path:
+            lines.extend(["", "Source path", event.source_path])
+        if event.detail:
+            lines.extend(["", "Detail", event.detail])
+        lines.extend(
+            [
+                "",
+                "Original",
+                _history_value_text(event.original),
+                "",
+                "Current",
+                _history_value_text(event.current),
+            ]
+        )
+        if event.metadata:
+            lines.extend(["", "Metadata", _history_value_text(event.metadata)])
+        self.history_inspector.setPlainText("\n".join(lines))
+
+    def _append_history_events(self, events: list[HistoryEvent]) -> None:
+        if not events:
+            return
+        try:
+            append_history_events(self.history_path, events)
+        except OSError as error:
+            QMessageBox.warning(self, "History Save Failed", str(error))
+            return
+        self._refresh_history_tab()
 
     def _audit_rules_tab(self) -> QWidget:
         widget = QWidget()
@@ -1638,6 +1925,9 @@ class MainWindow(QMainWindow):
         )
 
     def _save_selected(self) -> None:
+        if self._changes_tab_is_current():
+            self._save_applied_changes_tab_metadata()
+            return
         if not self._audit_tab_is_current():
             self._save_current_library_tab_changes()
             return
@@ -1647,14 +1937,47 @@ class MainWindow(QMainWindow):
         if profile is None or settings is None:
             return
 
+        policy_path = _workspace_policy_file_path(self.workspace_config_path, profile)
+        history_events = _history_events_for_policy_save(
+            profile,
+            settings,
+            self._saved_policy_profiles_by_id.get(profile.profile_id),
+            self._saved_audit_policy_settings.get(profile.profile_id, {}),
+            policy_path,
+        )
         self._save_policy_override(profile)
         self._save_audit_policy_settings(settings)
+        self._append_history_events(history_events)
         self._saved_policy_profiles_by_id[profile.profile_id] = copy.deepcopy(profile)
         self._saved_audit_policy_settings[profile.profile_id] = _audit_policy_settings_to_dict(settings)
         self._refresh_current_audit_policy_item()
         self._show_policy_configuration(self.audit_policy_list.currentItem())
+        self._refresh_changes_tab()
         self._update_action_buttons()
         self._show_inline_status(f"Saved audit policy: {profile.name}", 5000)
+
+    def _save_applied_changes_tab_metadata(self) -> None:
+        items = [*self.symbol_items, *self.footprint_items]
+        changes = _kicad_metadata_changes_for_items(items)
+        if not changes:
+            self._show_inline_status("No applied metadata changes to save.", 5000)
+            self._update_action_buttons()
+            return
+
+        try:
+            save_metadata_changes(changes)
+        except KiCadWriteError as error:
+            QMessageBox.warning(self, "Save Failed", str(error))
+            return
+
+        self._append_history_events(_history_events_for_metadata_save(items))
+        _mark_saved_metadata_changes(items)
+        self.symbol_tab_state.model.refresh_all()
+        self.footprint_tab_state.model.refresh_all()
+        self._refresh_policy_findings()
+        self._refresh_changes_tab()
+        self._update_action_buttons()
+        self._show_inline_status(f"Saved {len(changes)} applied metadata changes.", 5000)
 
     def _save_current_library_tab_changes(self) -> None:
         tab_state = self._current_library_tab_state()
@@ -1675,13 +1998,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Save Failed", str(error))
             return
 
+        self._append_history_events(_history_events_for_metadata_save(items))
         _mark_saved_metadata_changes(items)
         tab_state.model.refresh_all()
         self._refresh_policy_findings()
+        self._refresh_changes_tab()
         self._update_action_buttons()
         self._show_inline_status(f"Saved {len(changes)} KiCad metadata changes.", 5000)
 
     def _revert_selected(self) -> None:
+        if self._changes_tab_is_current():
+            self._revert_applied_changes_tab_metadata()
+            return
         if not self._audit_tab_is_current():
             self._revert_current_library_tab_changes()
             return
@@ -1709,10 +2037,14 @@ class MainWindow(QMainWindow):
             current_item.setText(self._audit_policy_item_text(replacement))
         self._refresh_policy_findings()
         self._show_policy_configuration(current_item)
+        self._refresh_changes_tab()
         self._update_action_buttons()
         self._show_inline_status(f"Reverted audit policy: {replacement.name}", 5000)
 
     def _revert_all(self) -> None:
+        if self._changes_tab_is_current():
+            self._revert_all_changes_tab_metadata()
+            return
         if not self._audit_tab_is_current():
             self._revert_current_library_tab_changes()
             return
@@ -1741,8 +2073,27 @@ class MainWindow(QMainWindow):
             _select_audit_policy_row(self.audit_policy_list, selected_profile_id)
         self._refresh_policy_findings()
         self._show_policy_configuration(self.audit_policy_list.currentItem())
+        self._refresh_changes_tab()
         self._update_action_buttons()
         self._show_inline_status("Reverted all audit policy changes.", 5000)
+
+    def _revert_applied_changes_tab_metadata(self) -> None:
+        reverted_count = _revert_metadata_changes([*self.symbol_items, *self.footprint_items], included_only=True)
+        self.symbol_tab_state.model.refresh_all()
+        self.footprint_tab_state.model.refresh_all()
+        self._refresh_policy_findings()
+        self._refresh_changes_tab()
+        self._update_action_buttons()
+        self._show_inline_status(f"Reverted {reverted_count} applied metadata changes.", 5000)
+
+    def _revert_all_changes_tab_metadata(self) -> None:
+        reverted_count = _revert_metadata_changes([*self.symbol_items, *self.footprint_items])
+        self.symbol_tab_state.model.refresh_all()
+        self.footprint_tab_state.model.refresh_all()
+        self._refresh_policy_findings()
+        self._refresh_changes_tab()
+        self._update_action_buttons()
+        self._show_inline_status(f"Reverted {reverted_count} metadata changes.", 5000)
 
     def _revert_current_library_tab_changes(self) -> None:
         tab_state = self._current_library_tab_state()
@@ -1754,6 +2105,7 @@ class MainWindow(QMainWindow):
         reverted_count = _revert_metadata_changes(items)
         tab_state.model.refresh_all()
         self._refresh_policy_findings()
+        self._refresh_changes_tab()
         self._update_action_buttons()
         self._show_inline_status(f"Reverted {reverted_count} metadata changes.", 5000)
 
@@ -1776,6 +2128,9 @@ class MainWindow(QMainWindow):
     def _audit_tab_is_current(self) -> bool:
         return hasattr(self, "tabs") and self.tabs.tabText(self.tabs.currentIndex()) == "Audit"
 
+    def _changes_tab_is_current(self) -> bool:
+        return hasattr(self, "tabs") and self.tabs.currentIndex() == getattr(self, "changes_tab_index", -1)
+
     def _update_action_buttons(self) -> None:
         if not all(
             hasattr(self, attribute)
@@ -1789,6 +2144,12 @@ class MainWindow(QMainWindow):
 
         selected_dirty = self._current_tab_selected_dirty()
         any_dirty = self._current_tab_any_dirty()
+        if self._changes_tab_is_current():
+            self.save_selected_button.setText("Save Applied")
+            self.revert_selected_button.setText("Revert Applied")
+        else:
+            self.save_selected_button.setText("Save Selected")
+            self.revert_selected_button.setText("Revert Selected")
         self.save_selected_button.setEnabled(selected_dirty)
         self.revert_selected_button.setEnabled(selected_dirty)
         self.revert_all_button.setEnabled(any_dirty)
@@ -1802,6 +2163,8 @@ class MainWindow(QMainWindow):
             return _items_have_changes(self.symbol_items)
         if tab_name == "Footprints":
             return _items_have_changes(self.footprint_items)
+        if self._changes_tab_is_current():
+            return self._checked_changes_have_metadata()
         return False
 
     def _current_tab_any_dirty(self) -> bool:
@@ -1815,6 +2178,8 @@ class MainWindow(QMainWindow):
             return _items_have_changes(self.symbol_items)
         if tab_name == "Footprints":
             return _items_have_changes(self.footprint_items)
+        if self._changes_tab_is_current():
+            return _items_have_changes([*self.symbol_items, *self.footprint_items])
         return False
 
     def _save_audit_policy_settings(self, settings: AuditPolicySettings) -> None:
@@ -2495,11 +2860,13 @@ def _mark_saved_metadata_changes(items: list[MockItem]) -> None:
             item.metadata_fields[field_name] = cell.working_value
 
 
-def _revert_metadata_changes(items: list[MockItem]) -> int:
+def _revert_metadata_changes(items: list[MockItem], *, included_only: bool = False) -> int:
     reverted_count = 0
     for item in items:
         for field_name, cell in item.cells.items():
             if not cell.is_changed:
+                continue
+            if included_only and not cell.included_in_save:
                 continue
             cell.working_value = cell.original_value
             cell.change_source = None
@@ -2508,6 +2875,113 @@ def _revert_metadata_changes(items: list[MockItem]) -> int:
             item.metadata_fields[field_name] = cell.original_value
             reverted_count += 1
     return reverted_count
+
+
+def _pending_metadata_changes(scope: str, items: list[MockItem]) -> list[PendingChange]:
+    changes: list[PendingChange] = []
+    for item in items:
+        for field_name, cell in item.cells.items():
+            if not cell.is_changed:
+                continue
+            source_parts = []
+            if cell.change_source is not None:
+                source_parts.append(cell.change_source.value)
+            if cell.change_kind is not None:
+                source_parts.append(cell.change_kind.value)
+            changes.append(
+                PendingChange(
+                    scope=scope,
+                    library=item.display_library,
+                    item=item.name,
+                    field=field_name,
+                    original=cell.original_value,
+                    current=cell.working_value,
+                    included=cell.included_in_save,
+                    source=", ".join(source_parts),
+                    detail=f"Full source library: {item.library}",
+                    source_path=item.source_path,
+                    item_ref=item,
+                )
+            )
+    return changes
+
+
+def _history_events_for_metadata_save(items: list[MockItem]) -> list[HistoryEvent]:
+    events: list[HistoryEvent] = []
+    for item in items:
+        item_type = _kicad_item_type(item)
+        if item_type is None or item.source_path is None:
+            continue
+        for field_name, cell in item.cells.items():
+            if not cell.is_changed or not cell.included_in_save:
+                continue
+            events.append(
+                HistoryEvent.create(
+                    action="metadata_saved",
+                    scope=item_type,
+                    library=item.display_library,
+                    item=item.name,
+                    field=field_name,
+                    original=cell.original_value,
+                    current=cell.working_value,
+                    source_path=item.source_path,
+                    detail=f"Full source library: {item.library}",
+                    metadata={
+                        "change_source": cell.change_source.value if cell.change_source else "",
+                        "change_kind": cell.change_kind.value if cell.change_kind else "",
+                    },
+                )
+            )
+    return events
+
+
+def _history_events_for_policy_save(
+    profile: PolicyProfile,
+    settings: AuditPolicySettings,
+    saved_profile: PolicyProfile | None,
+    saved_settings: dict[str, object],
+    policy_path: Path,
+) -> list[HistoryEvent]:
+    return [
+        HistoryEvent.create(
+            action="policy_saved",
+            scope="policy",
+            library=profile.name,
+            item=profile.profile_id,
+            field="Policy settings and rules",
+            original=_policy_history_state(saved_profile, saved_settings),
+            current=_policy_history_state(profile, _audit_policy_settings_to_dict(settings)),
+            source_path=policy_path,
+            detail="Saved audit policy override.",
+        )
+    ]
+
+
+def _policy_history_state(
+    profile: PolicyProfile | None,
+    settings: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "profile": profile.to_dict() if profile is not None else {},
+        "settings": dict(settings),
+    }
+
+
+def _read_only_table_item(value: str) -> QTableWidgetItem:
+    item = QTableWidgetItem(value)
+    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+    return item
+
+
+def _table_value(value: object) -> str:
+    text = _history_value_text(value).replace("\r", " ").replace("\n", " ")
+    return text if len(text) <= 160 else text[:157] + "..."
+
+
+def _history_value_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, indent=2, sort_keys=True)
 
 
 def _kicad_item_type(item: MockItem) -> str | None:

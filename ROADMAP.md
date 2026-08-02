@@ -21,11 +21,10 @@
 - Connect selected library layout profiles to Configuration dialog workflows.
 - Expand first-run and repair guided setup for creating or recreating local workspace configuration.
 - Add library root discovery and include/exclude controls for symbol and footprint libraries.
-- Build out the Changes tab with mock change groups and per-change inclusion controls.
-- Build the selective preview dialog using mock changes.
-- Build a prototype History tab for `.kmfdm-history.jsonl` entries.
 - Add safe-save staging, backups, validation, rollback, and external modification detection.
-- Add sidecar history writes for saved metadata changes.
+- Add per-change selection actions and preview from the Changes tab.
+- Add History tab filters/search and richer save-result reporting.
+- Build the selective preview dialog using pending changes.
 - Add status-bar counts for loaded libraries, items, issues, and pending changes.
 - Add table filtering for issues and pending changes.
 - Expand source-library and column filters after real KiCad scans replace mock data.

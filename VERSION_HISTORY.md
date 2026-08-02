@@ -12,6 +12,10 @@
 - Added Symbols and Footprints filter pills for unsaved rows, warning issues, and error issues with live tab-local counts.
 - Allow Save Selected on Symbols and Footprints to write included changed metadata cells back to scanned KiCad symbol and footprint files.
 - Allow Revert Selected/Revert All on Symbols and Footprints to discard pending metadata cell edits on the active tab.
+- Replaced the Changes placeholder with a live pending-change list for edited symbol and footprint metadata.
+- Added an Apply checkbox column, Changes tab pending-count label, and Save Applied/Revert Applied actions for metadata review.
+- Replaced the History placeholder with a read-only `.kmfdm-history.jsonl` viewer.
+- Append sidecar history events when metadata and audit policy saves succeed.
 - Simplified Library column and source-filter display with unique library aliases while keeping full source labels in the inspector.
 - Kept full scanned metadata available to audit rules even when fields are not visible table columns.
 - Added a starter library validation policy for datasheet, associated footprint, and 3D-model requirements.

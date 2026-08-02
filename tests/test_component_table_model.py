@@ -31,6 +31,7 @@ from kmfdm.gui.main_window import (
     _audit_policy_settings_overrides_from_config,
 )
 from kmfdm.models import CellState, Issue, IssueSeverity
+from kmfdm.services.history import load_history_events
 from kmfdm.services.policy_audit import audit_items_against_policies
 
 
@@ -522,8 +523,10 @@ def test_main_window_policy_replacement_persists_workspace_override(qtbot, monke
 
     saved_profile = load_policy_profile(policy_path)
     saved_config = load_workspace_config(config_path)
+    history_events = load_history_events(tmp_path / ".kmfdm-history.jsonl")
     assert any(saved_rule.rule_id == "local-test-rule" for saved_rule in saved_profile.rules)
     assert saved_config.policy_files == [LibrarySelection(str(policy_path))]
+    assert any(event.action == "policy_saved" and event.item == "minimal-library-policy" for event in history_events)
     assert window.audit_policy_list.currentItem().text().endswith(
         f"({len(profile.rules) + 1} rules)"
     )
@@ -693,6 +696,46 @@ def test_bottom_action_buttons_are_tab_dirty_state_specific(
     assert window.revert_all_button.isEnabled()
 
 
+def test_changes_tab_lists_metadata_changes_only_with_count_and_apply(
+    qtbot,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / ".kmfdm-workspace.json"
+    save_workspace_config(WorkspaceConfig(layout_profile_id="flat-contained-symbols"), config_path)
+    window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(window)
+    window.symbol_items = [
+        MockItem(
+            "Analog.pretty/Analog.kicad_sym",
+            "TPS54560",
+            {"Value": CellState("TPS54560", "TPS54560")},
+            library_alias="Analog",
+        )
+    ]
+    window._refresh_library_tab(window.symbol_tab_state, window.symbol_items)
+
+    value_index = window.symbol_tab_state.model.index(0, window.symbol_tab_state.model.columns.index("Value"))
+    assert window.symbol_tab_state.model.setData(value_index, "TPS54560A", Qt.EditRole)
+    window.tabs.setCurrentIndex(2)
+    _select_policy(window, "datasheet-link-policy")
+    window.audit_severity_error.setChecked(True)
+    window.tabs.setCurrentIndex(3)
+
+    rows = [
+        [window.changes_table.item(row, column).text() for column in range(window.changes_table.columnCount())]
+        for row in range(window.changes_table.rowCount())
+    ]
+
+    assert window.tabs.tabText(3) == "Changes (1)"
+    assert window.save_selected_button.text() == "Save Applied"
+    assert window.revert_selected_button.text() == "Revert Applied"
+    assert window.changes_table.item(0, 0).checkState() == Qt.CheckState.Checked
+    assert any(row[1] == "Symbol" and row[3] == "TPS54560" and row[4] == "Value" for row in rows)
+    assert not any(row[1] == "Policy" for row in rows)
+
+
 def test_library_tab_status_filter_buttons_show_counts_and_filter_rows(
     qtbot,
     monkeypatch,
@@ -768,10 +811,69 @@ def test_save_selected_writes_symbol_metadata_and_clears_dirty_state(
 
     window._save_selected()
 
+    history_events = load_history_events(tmp_path / ".kmfdm-history.jsonl")
     assert '(property "Value" "TPS54560A")' in symbol_path.read_text(encoding="utf-8")
     assert window.symbol_items[0].cells["Value"].original_value == "TPS54560A"
     assert not window.symbol_items[0].cells["Value"].is_changed
     assert not window.save_selected_button.isEnabled()
+    assert any(
+        event.action == "metadata_saved"
+        and event.scope == "symbol"
+        and event.item == "TPS54560"
+        and event.field == "Value"
+        and event.original == "TPS54560"
+        and event.current == "TPS54560A"
+        for event in history_events
+    )
+
+
+def test_changes_tab_apply_checkbox_controls_save_applied(
+    qtbot,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    symbol_path = tmp_path / "ICs.pretty" / "ICs.kicad_sym"
+    symbol_path.parent.mkdir()
+    symbol_path.write_text(
+        """
+        (kicad_symbol_lib
+          (symbol "TPS54560"
+            (property "Value" "TPS54560")
+          )
+        )
+        """,
+        encoding="utf-8",
+    )
+    config = WorkspaceConfig(
+        layout_profile_id="flat-contained-symbols",
+        symbol_libraries=[LibrarySelection(str(symbol_path))],
+    )
+    config_path = tmp_path / ".kmfdm-workspace.json"
+    save_workspace_config(config, config_path)
+    window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(window)
+    window.symbol_items, window.footprint_items = configured_table_items_from_workspace(config)
+    window._refresh_library_tab(window.symbol_tab_state, window.symbol_items)
+
+    value_index = window.symbol_tab_state.model.index(0, window.symbol_tab_state.model.columns.index("Value"))
+    assert window.symbol_tab_state.model.setData(value_index, "TPS54560A", Qt.EditRole)
+    window.tabs.setCurrentIndex(3)
+
+    apply_item = window.changes_table.item(0, 0)
+    apply_item.setCheckState(Qt.CheckState.Unchecked)
+
+    assert not window.save_selected_button.isEnabled()
+    assert not window.revert_selected_button.isEnabled()
+    assert window.revert_all_button.isEnabled()
+
+    apply_item.setCheckState(Qt.CheckState.Checked)
+    window._save_selected()
+
+    assert '(property "Value" "TPS54560A")' in symbol_path.read_text(encoding="utf-8")
+    assert window.tabs.tabText(3) == "Changes"
+    assert window.changes_table.rowCount() == 0
+    assert not window.symbol_items[0].cells["Value"].is_changed
 
 
 def test_configuration_dialog_chooses_symbol_library_when_footprint_has_multiple_candidates(
