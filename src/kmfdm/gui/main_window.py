@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import ctypes
 import json
 import os
@@ -9,7 +10,18 @@ from dataclasses import dataclass, field, replace
 from importlib import resources
 from pathlib import Path
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPoint, QRect, QSortFilterProxyModel, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QObject,
+    QPoint,
+    QRect,
+    QSortFilterProxyModel,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -30,8 +42,10 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QRadioButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
@@ -56,16 +70,20 @@ from kmfdm.config import (
     default_symbol_library_for_footprint,
     load_bundled_layout_profiles,
     load_bundled_policy_profiles,
+    load_policy_profile,
     load_workspace_config,
+    save_policy_profile,
     save_workspace_config,
     workspace_setup_issue,
 )
 from kmfdm.models import CellState, ChangeKind, ChangeSource, Issue, IssueSeverity
-from kmfdm.services.kicad_scan import KiCadLibraryItem, scan_workspace_libraries
+from kmfdm.services.kicad_scan import KiCadLibraryItem, ScanProgressCallback, scan_workspace_libraries
+from kmfdm.services.kicad_write import KiCadMetadataChange, KiCadWriteError, save_metadata_changes
 from kmfdm.services.policy_audit import AuditContext, AuditItem, PolicyFinding, audit_items_against_policies
 
 
 WINDOWS_APP_ID = "Phoenixjack.KMFDM"
+WORKSPACE_POLICY_DIRNAME = ".kmfdm-policies"
 
 
 @dataclass
@@ -76,6 +94,7 @@ class MockItem:
     auditable: bool = True
     library_alias: str = ""
     metadata_fields: dict[str, str] = field(default_factory=dict)
+    source_path: Path | None = None
 
     @property
     def display_library(self) -> str:
@@ -90,6 +109,9 @@ class LibraryTabState:
     inspector: ReadOnlyInfoPanel
     library_filter: MultiSelectFilterButton
     column_filter: MultiSelectFilterButton
+    unsaved_filter: StatusFilterButton
+    warning_filter: StatusFilterButton
+    error_filter: StatusFilterButton
 
 
 @dataclass
@@ -100,6 +122,33 @@ class AuditPolicySettings:
     target: str
     severity: str
     enabled_libraries: set[str] = field(default_factory=set)
+    known_libraries: set[str] = field(default_factory=set)
+
+
+class LibraryLoadWorker(QObject):
+    progress = Signal(int, int, str)
+    finished = Signal(object, object)
+    failed = Signal(str)
+
+    def __init__(self, workspace_config: WorkspaceConfig) -> None:
+        super().__init__()
+        self.workspace_config = workspace_config
+
+    def run(self) -> None:
+        try:
+            self.progress.emit(0, 1, "Preparing KiCad library scan...")
+            symbol_items, footprint_items = configured_table_items_from_workspace(
+                self.workspace_config,
+                progress_callback=self._report_progress,
+            )
+        except Exception as error:  # pragma: no cover - exercised through GUI error path.
+            self.failed.emit(str(error))
+            return
+
+        self.finished.emit(symbol_items, footprint_items)
+
+    def _report_progress(self, completed_steps: int, total_steps: int, message: str) -> None:
+        self.progress.emit(completed_steps, total_steps, message)
 
 
 class ComponentTableModel(QAbstractTableModel):
@@ -237,8 +286,12 @@ class ComponentTableModel(QAbstractTableModel):
             return True
 
         cell.working_value = new_value
-        cell.change_source = ChangeSource.MANUAL
-        cell.change_kind = ChangeKind.VALUE_CHANGED
+        if new_value == cell.original_value:
+            cell.change_source = None
+            cell.change_kind = None
+        else:
+            cell.change_source = ChangeSource.MANUAL
+            cell.change_kind = ChangeKind.VALUE_CHANGED
         top_left = self.index(index.row(), 0)
         self.dataChanged.emit(top_left, index, [Qt.DisplayRole, Qt.BackgroundRole, Qt.FontRole, Qt.ToolTipRole, Qt.CheckStateRole])
         return True
@@ -259,10 +312,30 @@ class ComponentFilterProxyModel(QSortFilterProxyModel):
     def __init__(self) -> None:
         super().__init__()
         self._enabled_libraries: set[str] = set()
+        self._show_unsaved_only = False
+        self._show_warnings_only = False
+        self._show_errors_only = False
 
     def set_enabled_libraries(self, libraries: set[str]) -> None:
         self.beginFilterChange()
         self._enabled_libraries = set(libraries)
+        self.endFilterChange()
+
+    def set_status_filters(
+        self,
+        *,
+        unsaved: bool,
+        warnings: bool,
+        errors: bool,
+    ) -> None:
+        self.beginFilterChange()
+        self._show_unsaved_only = unsaved
+        self._show_warnings_only = warnings
+        self._show_errors_only = errors
+        self.endFilterChange()
+
+    def refresh_status_filters(self) -> None:
+        self.beginFilterChange()
         self.endFilterChange()
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
@@ -272,7 +345,21 @@ class ComponentFilterProxyModel(QSortFilterProxyModel):
 
         library_column = source_model.columns.index("Library")
         library_index = source_model.index(source_row, library_column, source_parent)
-        return source_model.data(library_index, Qt.DisplayRole) in self._enabled_libraries
+        if source_model.data(library_index, Qt.DisplayRole) not in self._enabled_libraries:
+            return False
+
+        if not self._status_filters_active():
+            return True
+
+        item = source_model.items[source_row]
+        return (
+            (self._show_unsaved_only and _item_has_changes(item))
+            or (self._show_warnings_only and _item_has_issue_severity(item, IssueSeverity.WARNING))
+            or (self._show_errors_only and _item_has_issue_severity(item, IssueSeverity.ERROR))
+        )
+
+    def _status_filters_active(self) -> bool:
+        return self._show_unsaved_only or self._show_warnings_only or self._show_errors_only
 
 
 class MultiSelectFilterButton(QPushButton):
@@ -353,6 +440,45 @@ class MultiSelectFilterButton(QPushButton):
         else:
             summary = f"{selected_count}/{total_count}"
         self.setText(f"{self.title}: {summary}")
+
+
+class StatusFilterButton(QPushButton):
+    def __init__(self, title: str, active_color: str) -> None:
+        super().__init__()
+        self.title = title
+        self.active_color = active_color
+        self.count = 0
+        self.setCheckable(True)
+        self.setMinimumHeight(24)
+        self.setToolTip(f"Filter rows with {title.casefold()}.")
+        self.set_count(0)
+
+    def set_count(self, count: int) -> None:
+        self.count = count
+        self.setText(f"{self.title}: {count}")
+        self._apply_style(count)
+
+    def _apply_style(self, count: int) -> None:
+        background = "#d9ead3" if count == 0 else self.active_color
+        border = "#5f8f5f" if count == 0 else "#7f7f7f"
+        if self.isChecked():
+            border = "#222222"
+        self.setStyleSheet(
+            "QPushButton {"
+            f"background-color: {background};"
+            f"border: 1px solid {border};"
+            "border-radius: 11px;"
+            "padding: 3px 10px;"
+            "}"
+            "QPushButton:checked {"
+            "border: 2px solid #222222;"
+            "padding: 2px 9px;"
+            "}"
+        )
+
+    def nextCheckState(self) -> None:
+        super().nextCheckState()
+        self._apply_style(self.count)
 
 
 class CenteredCheckBoxDelegate(QStyledItemDelegate):
@@ -438,6 +564,10 @@ class RuleEditorDialog(QDialog):
         self.test_input = QLineEdit()
         self.test_input.setPlaceholderText("Type a sample value to test the regex")
         self.regex_result = QLabel("Regex preview is inactive.")
+        self.unsupported_rule = rule is not None and rule.rule_type not in {
+            "required_field",
+            "regex_check",
+        }
 
         form_layout.addRow("Rule name", self.name_input)
         form_layout.addRow("Field", self.field_combo)
@@ -463,11 +593,20 @@ class RuleEditorDialog(QDialog):
         help_text.setWordWrap(True)
         layout.addWidget(help_text)
 
-        note = QLabel("Presentation placeholder: rule edits are not saved yet.")
+        note = QLabel(
+            "This editor currently saves required-field and regex rules."
+            if not self.unsupported_rule
+            else "This rule type is visible but is not editable in the first rule-editor slice."
+        )
         note.setWordWrap(True)
         layout.addWidget(note)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.ok_button.setEnabled(not self.unsupported_rule)
+        buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
@@ -475,7 +614,76 @@ class RuleEditorDialog(QDialog):
         self.regex_input.textChanged.connect(self._update_regex_preview)
         self.test_input.textChanged.connect(self._update_regex_preview)
         self._populate_from_rule()
+        for control in [
+            self.name_input,
+            self.field_combo,
+            self.required_checkbox,
+            self.regex_enabled_checkbox,
+            self.regex_input,
+            self.test_input,
+        ]:
+            control.setEnabled(not self.unsupported_rule)
         self._update_regex_preview()
+
+    def accept(self) -> None:
+        try:
+            self.to_rule(existing_rule_ids=[])
+        except ValueError as error:
+            QMessageBox.warning(self, "Rule Incomplete", str(error))
+            return
+        super().accept()
+
+    def to_rule(self, *, existing_rule_ids: list[str]) -> PolicyRule:
+        if self.unsupported_rule:
+            raise ValueError("This rule type is not editable yet.")
+
+        name = self.name_input.text().strip()
+        field = self.field_combo.currentText().strip()
+        regex_enabled = self.regex_enabled_checkbox.isChecked()
+        required = self.required_checkbox.isChecked()
+        if not name:
+            raise ValueError("Enter a rule name.")
+        if not field:
+            raise ValueError("Choose or enter a field name.")
+        if not required and not regex_enabled:
+            raise ValueError("Select Required, Regex Pattern, or both.")
+
+        rule_id = self.rule.rule_id if self.rule is not None else _unique_rule_id(name, existing_rule_ids)
+        target = self.rule.target if self.rule is not None else "both"
+        severity = self.rule.severity if self.rule is not None else "warning"
+        save_behavior = self.rule.save_behavior if self.rule is not None else "advisory"
+        if regex_enabled:
+            pattern = self.regex_input.text().strip()
+            if not pattern:
+                raise ValueError("Enter a regex pattern.")
+            try:
+                re.compile(pattern)
+            except re.error as error:
+                raise ValueError(f"Invalid regex pattern: {error}") from error
+            return PolicyRule(
+                rule_id=rule_id,
+                name=name,
+                rule_type="regex_check",
+                target=target,
+                severity=severity,
+                save_behavior=save_behavior,
+                parameters={
+                    "field": field,
+                    "pattern": pattern,
+                    "mode": "contains_match",
+                    "ignore_blank": not required,
+                },
+            )
+
+        return PolicyRule(
+            rule_id=rule_id,
+            name=name,
+            rule_type="required_field",
+            target=target,
+            severity=severity,
+            save_behavior=save_behavior,
+            parameters={"field": field},
+        )
 
     def _populate_from_rule(self) -> None:
         if self.rule is None:
@@ -493,8 +701,14 @@ class RuleEditorDialog(QDialog):
                 self.field_combo.setCurrentIndex(field_index)
             else:
                 self.field_combo.setEditText(field)
-        self.required_checkbox.setChecked(self.rule.rule_type == "required_field")
         self.regex_enabled_checkbox.setChecked(self.rule.rule_type == "regex_check")
+        self.required_checkbox.setChecked(
+            self.rule.rule_type == "required_field"
+            or (
+                self.rule.rule_type == "regex_check"
+                and not bool(self.rule.parameters.get("ignore_blank", False))
+            )
+        )
         self.regex_input.setText(str(self.rule.parameters.get("pattern", "")))
 
     def _update_regex_preview(self) -> None:
@@ -537,19 +751,35 @@ class MainWindow(QMainWindow):
         self.workspace_config = WorkspaceConfig()
         self.workspace_setup_message = ""
         self._load_workspace_config_for_launch()
-        self.policy_profiles = load_bundled_policy_profiles()
-        self.symbol_items, self.footprint_items = configured_table_items_from_workspace(
-            self.workspace_config
+        self.policy_profiles = load_policy_profiles_for_workspace(
+            self.workspace_config,
+            self.workspace_config_path,
         )
+        self.symbol_items: list[MockItem] = []
+        self.footprint_items: list[MockItem] = []
         self.audit_policy_settings = audit_policy_settings_from_profiles(
             self.policy_profiles,
             self.symbol_items,
             self.footprint_items,
+            _audit_policy_settings_overrides_from_config(self.workspace_config),
         )
+        self._saved_policy_profiles_by_id = {
+            profile.profile_id: copy.deepcopy(profile)
+            for profile in self.policy_profiles
+        }
+        self._saved_audit_policy_settings = {
+            profile_id: _audit_policy_settings_to_dict(settings)
+            for profile_id, settings in self.audit_policy_settings.items()
+        }
         self.policy_findings: list[PolicyFinding] = []
         self._refresh_policy_findings()
+        self._library_load_thread: QThread | None = None
+        self._library_load_worker: LibraryLoadWorker | None = None
+        self._library_load_progress_dialog: QProgressDialog | None = None
+        self._library_load_has_completed = False
 
         tabs = QTabWidget()
+        self.tabs = tabs
         symbol_tab, self.symbol_tab_state = self._library_tab(self.symbol_items)
         footprint_tab, self.footprint_tab_state = self._library_tab(self.footprint_items)
         tabs.addTab(symbol_tab, _ui_icon("symbol"), "Symbols")
@@ -557,6 +787,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._audit_rules_tab(), _ui_icon("audit"), "Audit")
         tabs.addTab(QLabel("Changes prototype placeholder"), _ui_icon("changes"), "Changes")
         tabs.addTab(QLabel("History prototype placeholder"), _ui_icon("history"), "History")
+        tabs.currentChanged.connect(lambda _index: self._update_action_buttons())
 
         edit_menu = self.menuBar().addMenu("&Edit")
         configuration_action = QAction("Configuration...", self)
@@ -580,7 +811,9 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(tabs)
         central_layout.addLayout(self._action_bar())
         self.setCentralWidget(central_widget)
-        QTimer.singleShot(0, self._show_required_configuration_if_needed)
+        self._set_library_loading_message("Library data has not loaded yet.")
+        self._update_action_buttons()
+        QTimer.singleShot(0, self._start_launch_work)
 
     def _load_workspace_config_for_launch(self) -> None:
         load_path = self._workspace_config_load_path()
@@ -608,9 +841,13 @@ class MainWindow(QMainWindow):
 
         return self.workspace_config_path
 
-    def _show_required_configuration_if_needed(self) -> None:
+    def _start_launch_work(self) -> None:
+        if self._show_required_configuration_if_needed():
+            self._begin_deferred_library_load()
+
+    def _show_required_configuration_if_needed(self) -> bool:
         if not self.workspace_setup_message:
-            return
+            return True
 
         QMessageBox.warning(
             self,
@@ -625,28 +862,46 @@ class MainWindow(QMainWindow):
         )
         if not self._show_configuration_dialog(require_layout_profile=True):
             self.close()
+            return False
+        return False
 
     def _action_bar(self) -> QHBoxLayout:
         layout = QHBoxLayout()
-        layout.addStretch()
+        self.inline_status_label = QLabel("")
+        self.inline_status_label.setMinimumWidth(260)
+        self.inline_status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.inline_status_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.inline_status_label.setStyleSheet("color: #555555;")
+        layout.addWidget(self.inline_status_label, 1)
 
-        revert_selected_button = QPushButton("Revert Selected")
-        revert_selected_button.clicked.connect(lambda: self._show_mock_action("Revert Selected"))
-        layout.addWidget(revert_selected_button)
+        self.revert_selected_button = QPushButton("Revert Selected")
+        self.revert_selected_button.clicked.connect(self._revert_selected)
+        layout.addWidget(self.revert_selected_button)
 
-        revert_all_button = QPushButton("Revert All")
-        revert_all_button.clicked.connect(lambda: self._show_mock_action("Revert All"))
-        layout.addWidget(revert_all_button)
+        self.revert_all_button = QPushButton("Revert All")
+        self.revert_all_button.clicked.connect(self._revert_all)
+        layout.addWidget(self.revert_all_button)
 
-        save_button = QPushButton("Save Selected")
-        save_button.clicked.connect(lambda: self._show_mock_action("Save Selected"))
-        layout.addWidget(save_button)
+        self.save_selected_button = QPushButton("Save Selected")
+        self.save_selected_button.clicked.connect(self._save_selected)
+        layout.addWidget(self.save_selected_button)
 
         exit_button = QPushButton("Exit")
         exit_button.clicked.connect(self.close)
         layout.addWidget(exit_button)
 
         return layout
+
+    def _show_inline_status(self, message: str, timeout_ms: int = 0) -> None:
+        if not hasattr(self, "inline_status_label"):
+            return
+        self.inline_status_label.setText(message)
+        if timeout_ms > 0:
+            QTimer.singleShot(timeout_ms, lambda expected=message: self._clear_inline_status(expected))
+
+    def _clear_inline_status(self, expected_message: str) -> None:
+        if self.inline_status_label.text() == expected_message:
+            self.inline_status_label.clear()
 
     def _library_tab(self, items: list[MockItem]) -> tuple[QWidget, LibraryTabState]:
         widget = QWidget()
@@ -662,12 +917,20 @@ class MainWindow(QMainWindow):
         libraries = _available_libraries(items)
         library_filter = MultiSelectFilterButton("Source library", libraries)
         column_filter = MultiSelectFilterButton("Columns", ComponentTableModel.columns)
+        unsaved_filter = StatusFilterButton("Unsaved", "#cfe2f3")
+        warning_filter = StatusFilterButton("Warnings", "#fff2cc")
+        error_filter = StatusFilterButton("Errors", "#f4cccc")
         filter_bar.addWidget(library_filter)
         filter_bar.addWidget(column_filter)
+        filter_bar.addWidget(unsaved_filter)
+        filter_bar.addWidget(warning_filter)
+        filter_bar.addWidget(error_filter)
         filter_bar.addStretch()
 
         table = QTableView()
         model = ComponentTableModel(items)
+        model.dataChanged.connect(lambda *_args: self._update_action_buttons())
+        model.modelReset.connect(self._update_action_buttons)
         proxy_model = ComponentFilterProxyModel()
         proxy_model.setSourceModel(model)
         proxy_model.set_enabled_libraries(set(libraries))
@@ -679,10 +942,39 @@ class MainWindow(QMainWindow):
         inspector.setMinimumWidth(320)
 
         library_filter.selectionChanged.connect(proxy_model.set_enabled_libraries)
+        model.dataChanged.connect(lambda *_args, proxy=proxy_model: proxy.refresh_status_filters())
+        for button in [unsaved_filter, warning_filter, error_filter]:
+            button.toggled.connect(
+                lambda _checked, proxy=proxy_model, unsaved_button=unsaved_filter,
+                warning_button=warning_filter, error_button=error_filter: proxy.set_status_filters(
+                    unsaved=unsaved_button.isChecked(),
+                    warnings=warning_button.isChecked(),
+                    errors=error_button.isChecked(),
+                )
+            )
+        model.dataChanged.connect(
+            lambda *_args, source_model=model, unsaved_button=unsaved_filter,
+            warning_button=warning_filter, error_button=error_filter: _update_status_filter_counts(
+                source_model.items,
+                unsaved_button,
+                warning_button,
+                error_button,
+            )
+        )
+        model.modelReset.connect(
+            lambda source_model=model, unsaved_button=unsaved_filter,
+            warning_button=warning_filter, error_button=error_filter: _update_status_filter_counts(
+                source_model.items,
+                unsaved_button,
+                warning_button,
+                error_button,
+            )
+        )
         column_filter.selectionChanged.connect(lambda columns: self._apply_column_filter(table, model, columns))
         table.selectionModel().currentChanged.connect(
             lambda index: self._show_cell(proxy_model.mapToSource(index), model, inspector)
         )
+        _update_status_filter_counts(items, unsaved_filter, warning_filter, error_filter)
 
         left_layout.addLayout(filter_bar)
         left_layout.addWidget(table)
@@ -696,6 +988,9 @@ class MainWindow(QMainWindow):
             inspector=inspector,
             library_filter=library_filter,
             column_filter=column_filter,
+            unsaved_filter=unsaved_filter,
+            warning_filter=warning_filter,
+            error_filter=error_filter,
         )
 
     def _apply_column_filter(
@@ -740,6 +1035,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "symbol_tab_state"):
             self.symbol_tab_state.model.refresh_all()
             self.footprint_tab_state.model.refresh_all()
+            self._refresh_status_filter_counts(self.symbol_tab_state)
+            self._refresh_status_filter_counts(self.footprint_tab_state)
         if hasattr(self, "audit_library_table"):
             self._refresh_audit_violation_display()
 
@@ -754,14 +1051,134 @@ class MainWindow(QMainWindow):
         if hasattr(self, "audit_policy_list"):
             self._show_policy_configuration(self.audit_policy_list.currentItem())
 
+    def _begin_deferred_library_load(self) -> None:
+        if self._library_load_thread is not None:
+            return
+        if not _workspace_has_enabled_libraries(self.workspace_config):
+            self._apply_loaded_library_items([], [])
+            self._set_library_loading_message("No enabled KiCad libraries are configured.")
+            return
+
+        self._set_library_loading_message("Loading KiCad libraries...")
+        progress_dialog = QProgressDialog("Loading KiCad libraries...", None, 0, 100, self)
+        progress_dialog.setWindowTitle("Loading Libraries")
+        progress_dialog.setCancelButton(None)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setAutoReset(False)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setValue(0)
+        progress_dialog.show()
+        self._library_load_progress_dialog = progress_dialog
+
+        thread = QThread(self)
+        worker = LibraryLoadWorker(copy.deepcopy(self.workspace_config))
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._library_load_progress_changed)
+        worker.finished.connect(self._library_load_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(self._library_load_failed)
+        worker.failed.connect(thread.quit)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._library_load_thread_finished)
+        self._library_load_thread = thread
+        self._library_load_worker = worker
+        thread.start()
+
+    def _library_load_progress_changed(
+        self,
+        completed_steps: int,
+        total_steps: int,
+        message: str,
+    ) -> None:
+        percentage = _progress_percentage(completed_steps, total_steps)
+        if self._library_load_progress_dialog is not None:
+            self._library_load_progress_dialog.setLabelText(f"{message}\n\n{percentage}% complete")
+            self._library_load_progress_dialog.setValue(percentage)
+        self._set_library_loading_message(f"Loading KiCad libraries\n\n{percentage}% complete\n{message}")
+        self._show_inline_status(f"Loading KiCad libraries: {percentage}%")
+
+    def _library_load_finished(
+        self,
+        symbol_items: list[MockItem],
+        footprint_items: list[MockItem],
+    ) -> None:
+        self._close_library_load_progress_dialog()
+        self._apply_loaded_library_items(symbol_items, footprint_items)
+        self._show_inline_status(
+            f"Loaded {len(symbol_items)} symbols and {len(footprint_items)} footprints.",
+            5000,
+        )
+
+    def _library_load_failed(self, message: str) -> None:
+        self._close_library_load_progress_dialog()
+        self._set_library_loading_message("Library loading failed. Check Configuration and try again.")
+        QMessageBox.warning(self, "Library Load Failed", message)
+
+    def _library_load_thread_finished(self) -> None:
+        self._library_load_thread = None
+        self._library_load_worker = None
+
+    def _close_library_load_progress_dialog(self) -> None:
+        if self._library_load_progress_dialog is not None:
+            self._library_load_progress_dialog.close()
+            self._library_load_progress_dialog.deleteLater()
+            self._library_load_progress_dialog = None
+
+    def _apply_loaded_library_items(
+        self,
+        symbol_items: list[MockItem],
+        footprint_items: list[MockItem],
+    ) -> None:
+        self.symbol_items = symbol_items
+        self.footprint_items = footprint_items
+        if not self._library_load_has_completed:
+            self.audit_policy_settings = audit_policy_settings_from_profiles(
+                self.policy_profiles,
+                self.symbol_items,
+                self.footprint_items,
+                _audit_policy_settings_overrides_from_config(self.workspace_config),
+            )
+            self._saved_audit_policy_settings = {
+                profile_id: _audit_policy_settings_to_dict(settings)
+                for profile_id, settings in self.audit_policy_settings.items()
+            }
+            self._library_load_has_completed = True
+        else:
+            self._sync_audit_policy_libraries()
+        self._refresh_policy_findings()
+        self._refresh_library_tab(self.symbol_tab_state, self.symbol_items)
+        self._refresh_library_tab(self.footprint_tab_state, self.footprint_items)
+        if hasattr(self, "audit_policy_list"):
+            self._show_policy_configuration(self.audit_policy_list.currentItem())
+        self._update_action_buttons()
+
+    def _set_library_loading_message(self, message: str) -> None:
+        if hasattr(self, "symbol_tab_state"):
+            self.symbol_tab_state.inspector.setPlainText(message)
+        if hasattr(self, "footprint_tab_state"):
+            self.footprint_tab_state.inspector.setPlainText(message)
+
     def _refresh_library_tab(self, tab_state: LibraryTabState, items: list[MockItem]) -> None:
         tab_state.model.set_items(items)
         libraries = _available_libraries(items)
         tab_state.library_filter.set_options(libraries)
         tab_state.proxy_model.set_enabled_libraries(set(libraries))
+        self._refresh_status_filter_counts(tab_state)
         tab_state.inspector.setPlainText("Select a cell to inspect it.")
         tab_state.table.resizeColumnsToContents()
         tab_state.table.setColumnWidth(0, 72)
+
+    def _refresh_status_filter_counts(self, tab_state: LibraryTabState) -> None:
+        _update_status_filter_counts(
+            tab_state.model.items,
+            tab_state.unsaved_filter,
+            tab_state.warning_filter,
+            tab_state.error_filter,
+        )
+        tab_state.proxy_model.refresh_status_filters()
 
     def _audit_rules_tab(self) -> QWidget:
         widget = QWidget()
@@ -807,10 +1224,10 @@ class MainWindow(QMainWindow):
         delete_rule_button = QPushButton("Delete")
         new_rule_button.clicked.connect(lambda: self._show_rule_editor(new_rule=True))
         edit_rule_button.clicked.connect(lambda: self._show_rule_editor(new_rule=False))
-        delete_rule_button.clicked.connect(self._show_rule_delete_placeholder)
+        delete_rule_button.clicked.connect(self._delete_current_rule)
 
         for policy in self.policy_profiles:
-            item = QListWidgetItem(f"{policy.name} ({len(policy.rules)} rules)")
+            item = QListWidgetItem(self._audit_policy_item_text(policy))
             item.setIcon(_ui_icon("audit"))
             item.setData(Qt.ItemDataRole.UserRole, policy)
             self.audit_policy_list.addItem(item)
@@ -886,6 +1303,7 @@ class MainWindow(QMainWindow):
     def _show_policy_configuration(self, item: QListWidgetItem | None) -> None:
         if item is None:
             self.audit_policy_details.setPlainText("Select a policy to inspect it.")
+            self._update_action_buttons()
             return
 
         policy: PolicyProfile = item.data(Qt.ItemDataRole.UserRole)
@@ -912,18 +1330,32 @@ class MainWindow(QMainWindow):
             f"Severity: {settings.severity.title()}",
             f"Applies to: {_policy_target_label(settings.target)}",
             f"Rules: {len(policy.rules)}",
+            f"Unsaved changes: {'yes' if self._audit_policy_has_unsaved_changes(policy.profile_id) else 'no'}",
         ]
+        if policy.profile_id == "library-validation-policy":
+            lines.extend(
+                [
+                    "",
+                    "Default applicability",
+                    "GRAPHICS libraries start unchecked for this policy because symbolic schematic artwork and silkscreen-only footprints often do not need datasheets, associated footprints, or 3D models.",
+                ]
+            )
         if policy.rules:
             lines.extend(["", "Checks"])
             lines.extend(f"- {rule.name} [{rule.rule_type}]" for rule in policy.rules)
+        overlap_lines = _policy_field_overlap_lines(policy, self.policy_profiles)
+        if overlap_lines:
+            lines.extend(["", "Related field coverage"])
+            lines.extend(overlap_lines)
         lines.extend(
             [
                 "",
-                "Use New or Edit to preview the next rule-editor workflow.",
+                "Use New or Edit to maintain required-field and regex rules.",
                 "Symbols and Footprints remain the primary places to inspect individual findings.",
             ]
         )
         self.audit_policy_details.setPlainText("\n".join(lines))
+        self._update_action_buttons()
 
     def _audit_policy_controls_changed(self) -> None:
         if getattr(self, "_updating_audit_controls", False):
@@ -943,8 +1375,12 @@ class MainWindow(QMainWindow):
             settings.enabled_libraries &= available_libraries
             if settings.apply_to_new_libraries:
                 settings.enabled_libraries |= available_libraries
+            settings.known_libraries = set(available_libraries)
+        settings.known_libraries |= self._audit_libraries_for_target(settings.target)
         self._refresh_policy_findings()
+        self._refresh_current_audit_policy_item()
         self._show_policy_configuration(self.audit_policy_list.currentItem())
+        self._update_action_buttons()
 
     def _audit_library_item_changed(self, item: QTableWidgetItem) -> None:
         if getattr(self, "_updating_audit_controls", False):
@@ -961,7 +1397,11 @@ class MainWindow(QMainWindow):
             settings.enabled_libraries.add(library)
         else:
             settings.enabled_libraries.discard(library)
+        settings.known_libraries.add(library)
         self._refresh_policy_findings()
+        self._refresh_current_audit_policy_item()
+        self._show_policy_configuration(self.audit_policy_list.currentItem())
+        self._update_action_buttons()
 
     def _current_audit_policy_settings(self) -> AuditPolicySettings | None:
         item = self.audit_policy_list.currentItem()
@@ -996,7 +1436,7 @@ class MainWindow(QMainWindow):
     def _populate_audit_rule_list(self, policy: PolicyProfile) -> None:
         self.audit_rule_list.clear()
         for rule in policy.rules:
-            item = QListWidgetItem(rule.name)
+            item = QListWidgetItem(f"{rule.name} [{rule.rule_type}]")
             item.setData(Qt.ItemDataRole.UserRole, rule)
             self.audit_rule_list.addItem(item)
         if self.audit_rule_list.count():
@@ -1009,20 +1449,92 @@ class MainWindow(QMainWindow):
             rule=rule,
             parent=self,
         )
-        dialog.exec()
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
 
-    def _show_rule_delete_placeholder(self) -> None:
-        QMessageBox.information(
+        profile = self._current_audit_policy()
+        if profile is None:
+            return
+
+        existing_rule_ids = [
+            candidate.rule_id
+            for candidate in profile.rules
+            if rule is None or candidate.rule_id != rule.rule_id
+        ]
+        try:
+            updated_rule = dialog.to_rule(existing_rule_ids=existing_rule_ids)
+        except ValueError as error:
+            QMessageBox.warning(self, "Rule Incomplete", str(error))
+            return
+
+        rules = list(profile.rules)
+        if rule is None:
+            rules.append(updated_rule)
+        else:
+            rules = [
+                updated_rule if candidate.rule_id == rule.rule_id else candidate
+                for candidate in rules
+            ]
+        self._replace_current_policy(replace(profile, rules=rules))
+
+    def _delete_current_rule(self) -> None:
+        rule = self._current_audit_rule()
+        profile = self._current_audit_policy()
+        if rule is None or profile is None:
+            return
+
+        response = QMessageBox.question(
             self,
             "Delete Rule",
-            "Rule deletion will be enabled after policy editing and persistence are connected.",
+            f"Delete rule '{rule.name}' from {profile.name}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if response != QMessageBox.StandardButton.Yes:
+            return
+
+        self._replace_current_policy(
+            replace(
+                profile,
+                rules=[candidate for candidate in profile.rules if candidate.rule_id != rule.rule_id],
+            )
         )
 
-    def _current_audit_rule(self):
+    def _current_audit_policy(self) -> PolicyProfile | None:
+        item = self.audit_policy_list.currentItem()
+        if item is None:
+            return None
+        return item.data(Qt.ItemDataRole.UserRole)
+
+    def _current_audit_rule(self) -> PolicyRule | None:
         item = self.audit_rule_list.currentItem()
         if item is None:
             return None
         return item.data(Qt.ItemDataRole.UserRole)
+
+    def _replace_current_policy(self, profile: PolicyProfile) -> None:
+        current_item = self.audit_policy_list.currentItem()
+        if current_item is None:
+            return
+
+        self.policy_profiles = [
+            profile if candidate.profile_id == profile.profile_id else candidate
+            for candidate in self.policy_profiles
+        ]
+        settings = self.audit_policy_settings[profile.profile_id]
+        settings.profile = profile
+        current_item.setData(Qt.ItemDataRole.UserRole, profile)
+        current_item.setText(self._audit_policy_item_text(profile))
+        self._refresh_policy_findings()
+        self._show_policy_configuration(current_item)
+        self._update_action_buttons()
+
+    def _save_policy_override(self, profile: PolicyProfile) -> None:
+        policy_path = _workspace_policy_file_path(self.workspace_config_path, profile)
+        save_policy_profile(profile, policy_path)
+        if not _workspace_config_has_policy_file(self.workspace_config, policy_path):
+            self.workspace_config.policy_files.append(LibrarySelection(str(policy_path)))
+        save_workspace_config(self.workspace_config, self.workspace_config_path)
 
     def _audit_libraries_for_target(self, target: str) -> set[str]:
         libraries: set[str] = set()
@@ -1035,9 +1547,11 @@ class MainWindow(QMainWindow):
     def _sync_audit_policy_libraries(self) -> None:
         for settings in self.audit_policy_settings.values():
             available_libraries = self._audit_libraries_for_target(settings.target)
+            new_libraries = available_libraries - settings.known_libraries
             if settings.apply_to_new_libraries:
-                settings.enabled_libraries |= available_libraries
+                settings.enabled_libraries |= new_libraries
             settings.enabled_libraries &= available_libraries
+            settings.known_libraries = available_libraries
 
     def _selected_audit_target(self) -> str:
         if self.audit_target_symbols.isChecked():
@@ -1111,7 +1625,7 @@ class MainWindow(QMainWindow):
             self.workspace_config = dialog.to_config()
             save_workspace_config(self.workspace_config, self.workspace_config_path)
             self.workspace_setup_message = ""
-            self._refresh_configured_library_tables()
+            self._begin_deferred_library_load()
             QMessageBox.information(self, "Configuration", "Workspace configuration saved.")
             return True
         return False
@@ -1122,6 +1636,222 @@ class MainWindow(QMainWindow):
             "Preferences",
             "Preferences will be added as application-wide options emerge.",
         )
+
+    def _save_selected(self) -> None:
+        if not self._audit_tab_is_current():
+            self._save_current_library_tab_changes()
+            return
+
+        profile = self._current_audit_policy()
+        settings = self._current_audit_policy_settings()
+        if profile is None or settings is None:
+            return
+
+        self._save_policy_override(profile)
+        self._save_audit_policy_settings(settings)
+        self._saved_policy_profiles_by_id[profile.profile_id] = copy.deepcopy(profile)
+        self._saved_audit_policy_settings[profile.profile_id] = _audit_policy_settings_to_dict(settings)
+        self._refresh_current_audit_policy_item()
+        self._show_policy_configuration(self.audit_policy_list.currentItem())
+        self._update_action_buttons()
+        self._show_inline_status(f"Saved audit policy: {profile.name}", 5000)
+
+    def _save_current_library_tab_changes(self) -> None:
+        tab_state = self._current_library_tab_state()
+        items = self._current_library_tab_items()
+        if tab_state is None or items is None:
+            self._show_mock_action("Save Selected")
+            return
+
+        changes = _kicad_metadata_changes_for_items(items)
+        if not changes:
+            self._show_inline_status("No included KiCad metadata changes to save.", 5000)
+            self._update_action_buttons()
+            return
+
+        try:
+            save_metadata_changes(changes)
+        except KiCadWriteError as error:
+            QMessageBox.warning(self, "Save Failed", str(error))
+            return
+
+        _mark_saved_metadata_changes(items)
+        tab_state.model.refresh_all()
+        self._refresh_policy_findings()
+        self._update_action_buttons()
+        self._show_inline_status(f"Saved {len(changes)} KiCad metadata changes.", 5000)
+
+    def _revert_selected(self) -> None:
+        if not self._audit_tab_is_current():
+            self._revert_current_library_tab_changes()
+            return
+
+        profile = self._current_audit_policy()
+        if profile is None:
+            return
+
+        saved_profile = self._saved_policy_profiles_by_id.get(profile.profile_id)
+        if saved_profile is None:
+            return
+
+        replacement = copy.deepcopy(saved_profile)
+        self._replace_policy_in_memory(replacement)
+        self.audit_policy_settings[replacement.profile_id] = audit_policy_settings_from_profiles(
+            [replacement],
+            self.symbol_items,
+            self.footprint_items,
+            {replacement.profile_id: self._saved_audit_policy_settings.get(replacement.profile_id, {})},
+        )[replacement.profile_id]
+
+        current_item = self.audit_policy_list.currentItem()
+        if current_item is not None:
+            current_item.setData(Qt.ItemDataRole.UserRole, replacement)
+            current_item.setText(self._audit_policy_item_text(replacement))
+        self._refresh_policy_findings()
+        self._show_policy_configuration(current_item)
+        self._update_action_buttons()
+        self._show_inline_status(f"Reverted audit policy: {replacement.name}", 5000)
+
+    def _revert_all(self) -> None:
+        if not self._audit_tab_is_current():
+            self._revert_current_library_tab_changes()
+            return
+
+        selected_profile_id = None
+        current_policy = self._current_audit_policy()
+        if current_policy is not None:
+            selected_profile_id = current_policy.profile_id
+
+        self.policy_profiles = [
+            copy.deepcopy(self._saved_policy_profiles_by_id.get(profile.profile_id, profile))
+            for profile in self.policy_profiles
+        ]
+        self.audit_policy_settings = audit_policy_settings_from_profiles(
+            self.policy_profiles,
+            self.symbol_items,
+            self.footprint_items,
+            self._saved_audit_policy_settings,
+        )
+        for row, profile in enumerate(self.policy_profiles):
+            item = self.audit_policy_list.item(row)
+            item.setData(Qt.ItemDataRole.UserRole, profile)
+            item.setText(self._audit_policy_item_text(profile))
+
+        if selected_profile_id is not None:
+            _select_audit_policy_row(self.audit_policy_list, selected_profile_id)
+        self._refresh_policy_findings()
+        self._show_policy_configuration(self.audit_policy_list.currentItem())
+        self._update_action_buttons()
+        self._show_inline_status("Reverted all audit policy changes.", 5000)
+
+    def _revert_current_library_tab_changes(self) -> None:
+        tab_state = self._current_library_tab_state()
+        items = self._current_library_tab_items()
+        if tab_state is None or items is None:
+            self._show_mock_action("Revert Selected")
+            return
+
+        reverted_count = _revert_metadata_changes(items)
+        tab_state.model.refresh_all()
+        self._refresh_policy_findings()
+        self._update_action_buttons()
+        self._show_inline_status(f"Reverted {reverted_count} metadata changes.", 5000)
+
+    def _current_library_tab_state(self) -> LibraryTabState | None:
+        tab_name = self.tabs.tabText(self.tabs.currentIndex())
+        if tab_name == "Symbols":
+            return self.symbol_tab_state
+        if tab_name == "Footprints":
+            return self.footprint_tab_state
+        return None
+
+    def _current_library_tab_items(self) -> list[MockItem] | None:
+        tab_name = self.tabs.tabText(self.tabs.currentIndex())
+        if tab_name == "Symbols":
+            return self.symbol_items
+        if tab_name == "Footprints":
+            return self.footprint_items
+        return None
+
+    def _audit_tab_is_current(self) -> bool:
+        return hasattr(self, "tabs") and self.tabs.tabText(self.tabs.currentIndex()) == "Audit"
+
+    def _update_action_buttons(self) -> None:
+        if not all(
+            hasattr(self, attribute)
+            for attribute in [
+                "save_selected_button",
+                "revert_selected_button",
+                "revert_all_button",
+            ]
+        ):
+            return
+
+        selected_dirty = self._current_tab_selected_dirty()
+        any_dirty = self._current_tab_any_dirty()
+        self.save_selected_button.setEnabled(selected_dirty)
+        self.revert_selected_button.setEnabled(selected_dirty)
+        self.revert_all_button.setEnabled(any_dirty)
+
+    def _current_tab_selected_dirty(self) -> bool:
+        tab_name = self.tabs.tabText(self.tabs.currentIndex())
+        if tab_name == "Audit":
+            policy = self._current_audit_policy()
+            return policy is not None and self._audit_policy_has_unsaved_changes(policy.profile_id)
+        if tab_name == "Symbols":
+            return _items_have_changes(self.symbol_items)
+        if tab_name == "Footprints":
+            return _items_have_changes(self.footprint_items)
+        return False
+
+    def _current_tab_any_dirty(self) -> bool:
+        tab_name = self.tabs.tabText(self.tabs.currentIndex())
+        if tab_name == "Audit":
+            return any(
+                self._audit_policy_has_unsaved_changes(profile.profile_id)
+                for profile in self.policy_profiles
+            )
+        if tab_name == "Symbols":
+            return _items_have_changes(self.symbol_items)
+        if tab_name == "Footprints":
+            return _items_have_changes(self.footprint_items)
+        return False
+
+    def _save_audit_policy_settings(self, settings: AuditPolicySettings) -> None:
+        self.workspace_config.kia_interop = dict(self.workspace_config.kia_interop)
+        policy_settings = _audit_policy_settings_overrides_from_config(self.workspace_config)
+        policy_settings[settings.profile.profile_id] = _audit_policy_settings_to_dict(settings)
+        self.workspace_config.kia_interop["audit_policy_settings"] = policy_settings
+        save_workspace_config(self.workspace_config, self.workspace_config_path)
+
+    def _replace_policy_in_memory(self, profile: PolicyProfile) -> None:
+        self.policy_profiles = [
+            profile if candidate.profile_id == profile.profile_id else candidate
+            for candidate in self.policy_profiles
+        ]
+
+    def _audit_policy_item_text(self, policy: PolicyProfile) -> str:
+        suffix = " *" if self._audit_policy_has_unsaved_changes(policy.profile_id) else ""
+        return f"{policy.name} ({len(policy.rules)} rules){suffix}"
+
+    def _audit_policy_has_unsaved_changes(self, profile_id: str) -> bool:
+        current_profile = _policy_by_id(self.policy_profiles, profile_id)
+        saved_profile = self._saved_policy_profiles_by_id.get(profile_id)
+        if current_profile is not None and saved_profile is not None and current_profile != saved_profile:
+            return True
+
+        settings = self.audit_policy_settings.get(profile_id)
+        if settings is None:
+            return False
+        return _audit_policy_settings_to_dict(settings) != self._saved_audit_policy_settings.get(profile_id, {})
+
+    def _refresh_current_audit_policy_item(self) -> None:
+        item = self.audit_policy_list.currentItem()
+        if item is None:
+            return
+        policy = self._current_audit_policy()
+        if policy is not None:
+            item.setText(self._audit_policy_item_text(policy))
 
     def _show_mock_action(self, action_name: str) -> None:
         QMessageBox.information(self, action_name, f"{action_name} will operate on pending changes in a later slice.")
@@ -1421,31 +2151,153 @@ def _load_configuration_layout_profiles():
     return load_bundled_layout_profiles()
 
 
+def load_policy_profiles_for_workspace(
+    config: WorkspaceConfig,
+    workspace_config_path: Path,
+) -> list[PolicyProfile]:
+    bundled_profiles = load_bundled_policy_profiles()
+    profiles_by_id = {profile.profile_id: profile for profile in bundled_profiles}
+    profile_order = [profile.profile_id for profile in bundled_profiles]
+    for selection in config.policy_files:
+        if not selection.enabled:
+            continue
+        policy_path = _resolved_policy_file_path(selection.path, workspace_config_path)
+        if not policy_path.is_file():
+            continue
+        try:
+            profile = load_policy_profile(policy_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if profile.profile_id not in profiles_by_id:
+            profile_order.append(profile.profile_id)
+        profiles_by_id[profile.profile_id] = profile
+    return [profiles_by_id[profile_id] for profile_id in profile_order]
+
+
+def _resolved_policy_file_path(path_text: str, workspace_config_path: Path) -> Path:
+    path = Path(path_text)
+    if path.is_absolute():
+        return path
+    return workspace_config_path.parent / path
+
+
+def _workspace_policy_file_path(workspace_config_path: Path, profile: PolicyProfile) -> Path:
+    return workspace_config_path.parent / WORKSPACE_POLICY_DIRNAME / f"{profile.profile_id}.json"
+
+
+def _workspace_config_has_policy_file(config: WorkspaceConfig, policy_path: Path) -> bool:
+    policy_path = policy_path.resolve()
+    return any(
+        Path(selection.path).resolve() == policy_path
+        for selection in config.policy_files
+    )
+
+
 def audit_policy_settings_from_profiles(
     profiles: list[PolicyProfile],
     symbol_items: list[MockItem],
     footprint_items: list[MockItem],
+    overrides: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, AuditPolicySettings]:
     settings: dict[str, AuditPolicySettings] = {}
+    overrides = overrides or {}
     for profile in profiles:
-        target = _policy_default_target(profile)
-        libraries = _audit_libraries_for_items(target, symbol_items, footprint_items)
-        if profile.profile_id == "library-validation-policy":
-            libraries = {
-                library
-                for library in libraries
-                if "GRAPHICS" not in _library_display_alias(library, symbol_items, footprint_items).upper()
-                and "GRAPHICS" not in library.upper()
-            }
+        override = overrides.get(profile.profile_id, {})
+        target = _audit_setting_target_from_value(
+            override.get("target"),
+            default=_policy_default_target(profile),
+        )
+        available_libraries = _audit_libraries_for_items(target, symbol_items, footprint_items)
+        enabled_libraries = _default_enabled_audit_libraries(
+            profile.profile_id,
+            target,
+            symbol_items,
+            footprint_items,
+        )
+        known_libraries = set(available_libraries)
+        apply_to_new_libraries = _bool_from_value(
+            override.get("apply_to_new_libraries"),
+            default=True,
+        )
+        if "enabled_libraries" in override:
+            enabled_libraries = _string_set_from_value(override.get("enabled_libraries")) & available_libraries
+        if "known_libraries" in override:
+            saved_known_libraries = _string_set_from_value(override.get("known_libraries")) & available_libraries
+            if apply_to_new_libraries:
+                enabled_libraries |= available_libraries - saved_known_libraries
+            known_libraries = set(available_libraries)
         settings[profile.profile_id] = AuditPolicySettings(
             profile=profile,
-            enabled=True,
-            apply_to_new_libraries=True,
+            enabled=_bool_from_value(override.get("enabled"), default=True),
+            apply_to_new_libraries=apply_to_new_libraries,
             target=target,
-            severity=_policy_default_severity(profile),
-            enabled_libraries=libraries,
+            severity=_audit_setting_severity_from_value(
+                override.get("severity"),
+                default=_policy_default_severity(profile),
+            ),
+            enabled_libraries=enabled_libraries,
+            known_libraries=known_libraries,
         )
     return settings
+
+
+def _default_enabled_audit_libraries(
+    profile_id: str,
+    target: str,
+    symbol_items: list[MockItem],
+    footprint_items: list[MockItem],
+) -> set[str]:
+    libraries = _audit_libraries_for_items(target, symbol_items, footprint_items)
+    if profile_id != "library-validation-policy":
+        return libraries
+    return {
+        library
+        for library in libraries
+        if "GRAPHICS" not in _library_display_alias(library, symbol_items, footprint_items).upper()
+        and "GRAPHICS" not in library.upper()
+    }
+
+
+def _audit_policy_settings_overrides_from_config(config: WorkspaceConfig) -> dict[str, dict[str, object]]:
+    policy_settings = config.kia_interop.get("audit_policy_settings")
+    if not isinstance(policy_settings, dict):
+        return {}
+    return {
+        str(profile_id): dict(settings)
+        for profile_id, settings in policy_settings.items()
+        if isinstance(settings, dict)
+    }
+
+
+def _audit_policy_settings_to_dict(settings: AuditPolicySettings) -> dict[str, object]:
+    return {
+        "enabled": settings.enabled,
+        "apply_to_new_libraries": settings.apply_to_new_libraries,
+        "target": settings.target,
+        "severity": settings.severity,
+        "enabled_libraries": sorted(settings.enabled_libraries),
+        "known_libraries": sorted(settings.known_libraries),
+    }
+
+
+def _bool_from_value(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    return default
+
+
+def _audit_setting_target_from_value(value: object, *, default: str) -> str:
+    return value if isinstance(value, str) and value in {"symbol", "footprint", "both"} else default
+
+
+def _audit_setting_severity_from_value(value: object, *, default: str) -> str:
+    return value if isinstance(value, str) and value in {"error", "warning", "ignore"} else default
+
+
+def _string_set_from_value(value: object) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {item for item in value if isinstance(item, str)}
 
 
 def _policy_default_target(profile: PolicyProfile) -> str:
@@ -1455,6 +2307,21 @@ def _policy_default_target(profile: PolicyProfile) -> str:
     if targets == {"footprint"}:
         return "footprint"
     return "both"
+
+
+def _policy_by_id(profiles: list[PolicyProfile], profile_id: str) -> PolicyProfile | None:
+    for profile in profiles:
+        if profile.profile_id == profile_id:
+            return profile
+    return None
+
+
+def _select_audit_policy_row(policy_list: QListWidget, profile_id: str) -> None:
+    for row in range(policy_list.count()):
+        policy = policy_list.item(row).data(Qt.ItemDataRole.UserRole)
+        if policy.profile_id == profile_id:
+            policy_list.setCurrentRow(row)
+            return
 
 
 def _policy_default_severity(profile: PolicyProfile) -> str:
@@ -1486,6 +2353,47 @@ def _policy_target_label(target: str) -> str:
     return "Symbols and Footprints"
 
 
+def _policy_field_overlap_lines(
+    policy: PolicyProfile,
+    profiles: list[PolicyProfile],
+) -> list[str]:
+    fields = _policy_rule_fields(policy)
+    if not fields:
+        return []
+
+    overlap_by_field: dict[str, list[str]] = {}
+    for other_policy in profiles:
+        if other_policy.profile_id == policy.profile_id:
+            continue
+        other_fields = _policy_rule_fields(other_policy)
+        for field_name in fields & other_fields:
+            overlap_by_field.setdefault(field_name, []).append(other_policy.name)
+
+    return [
+        f"- {field}: also checked by {', '.join(sorted(policy_names))}"
+        for field, policy_names in sorted(overlap_by_field.items())
+    ]
+
+
+def _policy_rule_fields(policy: PolicyProfile) -> set[str]:
+    fields: set[str] = set()
+    for rule in policy.rules:
+        fields.update(_rule_fields(rule))
+    return fields
+
+
+def _rule_fields(rule: PolicyRule) -> set[str]:
+    fields = set()
+    for key in ["field", "canonical"]:
+        value = rule.parameters.get(key)
+        if isinstance(value, str) and value:
+            fields.add(value)
+    aliases = rule.parameters.get("aliases")
+    if isinstance(aliases, list):
+        fields.update(alias for alias in aliases if isinstance(alias, str) and alias)
+    return fields
+
+
 def _audit_libraries_for_items(
     target: str,
     symbol_items: list[MockItem],
@@ -1514,6 +2422,102 @@ def _clear_policy_issues(symbol_items: list[MockItem], footprint_items: list[Moc
     for item in [*symbol_items, *footprint_items]:
         for cell in item.cells.values():
             cell.issues = [issue for issue in cell.issues if not issue.policy_name]
+
+
+def _items_have_changes(items: list[MockItem]) -> bool:
+    return any(cell.is_changed for item in items for cell in item.cells.values())
+
+
+def _item_has_changes(item: MockItem) -> bool:
+    return any(cell.is_changed for cell in item.cells.values())
+
+
+def _item_has_issue_severity(item: MockItem, severity: IssueSeverity) -> bool:
+    return any(
+        issue.severity == severity
+        for cell in item.cells.values()
+        for issue in cell.issues
+    )
+
+
+def _issue_count_for_items(items: list[MockItem], severity: IssueSeverity) -> int:
+    return sum(
+        1
+        for item in items
+        for cell in item.cells.values()
+        for issue in cell.issues
+        if issue.severity == severity
+    )
+
+
+def _update_status_filter_counts(
+    items: list[MockItem],
+    unsaved_filter: StatusFilterButton,
+    warning_filter: StatusFilterButton,
+    error_filter: StatusFilterButton,
+) -> None:
+    unsaved_filter.set_count(sum(1 for item in items if _item_has_changes(item)))
+    warning_filter.set_count(_issue_count_for_items(items, IssueSeverity.WARNING))
+    error_filter.set_count(_issue_count_for_items(items, IssueSeverity.ERROR))
+
+
+def _kicad_metadata_changes_for_items(items: list[MockItem]) -> list[KiCadMetadataChange]:
+    changes: list[KiCadMetadataChange] = []
+    for item in items:
+        item_type = _kicad_item_type(item)
+        if item_type is None or item.source_path is None:
+            continue
+        for field_name, cell in item.cells.items():
+            if cell.is_changed and cell.included_in_save:
+                changes.append(
+                    KiCadMetadataChange(
+                        item_type=item_type,
+                        source_path=item.source_path,
+                        item_name=item.name,
+                        field_name=field_name,
+                        value=cell.working_value,
+                    )
+                )
+    return changes
+
+
+def _mark_saved_metadata_changes(items: list[MockItem]) -> None:
+    for item in items:
+        if item.source_path is None:
+            continue
+        for field_name, cell in item.cells.items():
+            if not cell.is_changed or not cell.included_in_save:
+                continue
+            cell.original_value = cell.working_value
+            cell.change_source = None
+            cell.change_kind = None
+            cell.included_in_save = True
+            item.metadata_fields[field_name] = cell.working_value
+
+
+def _revert_metadata_changes(items: list[MockItem]) -> int:
+    reverted_count = 0
+    for item in items:
+        for field_name, cell in item.cells.items():
+            if not cell.is_changed:
+                continue
+            cell.working_value = cell.original_value
+            cell.change_source = None
+            cell.change_kind = None
+            cell.included_in_save = True
+            item.metadata_fields[field_name] = cell.original_value
+            reverted_count += 1
+    return reverted_count
+
+
+def _kicad_item_type(item: MockItem) -> str | None:
+    if item.source_path is None:
+        return None
+    if item.source_path.suffix == ".kicad_sym":
+        return "symbol"
+    if item.source_path.suffix == ".kicad_mod":
+        return "footprint"
+    return None
 
 
 def _radio_row(buttons: list[QRadioButton]) -> QHBoxLayout:
@@ -1571,6 +2575,17 @@ def _discovered_field_names(symbol_items: list[MockItem], footprint_items: list[
     fields.discard("Library")
     fields.discard("Name")
     return sorted(fields, key=str.casefold)
+
+
+def _unique_rule_id(name: str, existing_rule_ids: list[str]) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-") or "rule"
+    existing = set(existing_rule_ids)
+    if base not in existing:
+        return base
+    index = 2
+    while f"{base}-{index}" in existing:
+        index += 1
+    return f"{base}-{index}"
 
 
 def _ui_icon(kind: str) -> QIcon:
@@ -1646,8 +2661,14 @@ def _available_libraries(items: list[MockItem]) -> list[str]:
     return sorted({item.display_library for item in items})
 
 
-def configured_table_items_from_workspace(config: WorkspaceConfig) -> tuple[list[MockItem], list[MockItem]]:
-    symbol_items, footprint_items = scan_workspace_libraries(config)
+def configured_table_items_from_workspace(
+    config: WorkspaceConfig,
+    progress_callback: ScanProgressCallback | None = None,
+) -> tuple[list[MockItem], list[MockItem]]:
+    symbol_items, footprint_items = scan_workspace_libraries(
+        config,
+        progress_callback=progress_callback,
+    )
     table_symbol_items = _scanned_or_placeholder_symbol_items(symbol_items, config.symbol_libraries)
     table_footprint_items = _scanned_or_placeholder_footprint_items(
         footprint_items,
@@ -1656,6 +2677,17 @@ def configured_table_items_from_workspace(config: WorkspaceConfig) -> tuple[list
     _apply_library_aliases(table_symbol_items)
     _apply_library_aliases(table_footprint_items)
     return table_symbol_items, table_footprint_items
+
+
+def _workspace_has_enabled_libraries(config: WorkspaceConfig) -> bool:
+    return any(selection.enabled for selection in [*config.symbol_libraries, *config.footprint_libraries])
+
+
+def _progress_percentage(completed_steps: int, total_steps: int) -> int:
+    if total_steps <= 0:
+        return 100
+    bounded_completed = max(0, min(completed_steps, total_steps))
+    return int(bounded_completed * 100 / total_steps)
 
 
 def configured_symbol_items(selections: list[LibrarySelection]) -> list[MockItem]:
@@ -1697,6 +2729,7 @@ def _mock_item_from_kicad_item(item: KiCadLibraryItem) -> MockItem:
         library=item.library,
         name=item.name,
         metadata_fields=dict(item.fields),
+        source_path=item.source_path,
         cells={
             "Value": _cell_from_fields(item.fields, ["Value"]),
             "Manufacturer": _cell_from_fields(
@@ -1871,13 +2904,18 @@ def _mock_items_to_audit_items(item_type: str, items: list[MockItem]) -> list[Au
             item_type=item_type,
             library=item.library,
             name=item.name,
-            fields=item.metadata_fields
-            if item.metadata_fields
-            else {field: cell.working_value for field, cell in item.cells.items()},
+            fields=_audit_fields_for_mock_item(item),
         )
         for item in items
         if item.auditable
     ]
+
+
+def _audit_fields_for_mock_item(item: MockItem) -> dict[str, str]:
+    fields = dict(item.metadata_fields)
+    for field_name, cell in item.cells.items():
+        fields[field_name] = cell.working_value
+    return fields
 
 
 def attach_policy_findings_to_mock_items(

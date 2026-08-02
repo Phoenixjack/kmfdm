@@ -63,6 +63,17 @@ class PolicyRule:
             parameters={key: value for key, value in data.items() if key not in base_keys},
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.rule_id,
+            "name": self.name,
+            "type": self.rule_type,
+            "target": self.target,
+            **dict(self.parameters),
+            "severity": self.severity,
+            "save_behavior": self.save_behavior,
+        }
+
 
 @dataclass(frozen=True)
 class PolicyProfile:
@@ -90,6 +101,16 @@ class PolicyProfile:
             rules=[PolicyRule.from_dict(rule) for rule in rules],
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "policy_schema_version": POLICY_SCHEMA_VERSION,
+            "id": self.profile_id,
+            "name": self.name,
+            "description": self.description,
+            "enabled_by_default": self.enabled_by_default,
+            "rules": [rule.to_dict() for rule in self.rules],
+        }
+
 
 def load_policy_profile(path: Path) -> PolicyProfile:
     with path.open("r", encoding="utf-8") as file:
@@ -100,6 +121,11 @@ def load_policy_profile(path: Path) -> PolicyProfile:
 
 def load_policy_profiles(directory: Path) -> list[PolicyProfile]:
     return [load_policy_profile(path) for path in sorted(directory.glob("*.json"))]
+
+
+def save_policy_profile(profile: PolicyProfile, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(profile.to_dict(), indent=2) + "\n", encoding="utf-8")
 
 
 def load_bundled_policy_profiles() -> list[PolicyProfile]:
@@ -121,7 +147,54 @@ def _policy_from_data(data: Any, source: object) -> PolicyProfile:
     if not isinstance(data, dict):
         raise ValueError(f"Policy must contain a JSON object: {source}")
 
-    return PolicyProfile.from_dict(data)
+    return PolicyProfile.from_dict(_migrate_policy_data(data))
+
+
+def _migrate_policy_data(data: dict[str, Any]) -> dict[str, Any]:
+    if data.get("id") != "manufacturer-part-policy":
+        return data
+
+    rules = data.get("rules")
+    if not isinstance(rules, list):
+        return data
+
+    changed = False
+    migrated_rules: list[Any] = []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            migrated_rules.append(rule)
+            continue
+
+        migrated_rule = dict(rule)
+        rule_id = migrated_rule.get("id")
+        if rule_id == "mpn-aliases":
+            aliases = migrated_rule.get("aliases")
+            if (
+                migrated_rule.get("canonical") == "Manufacturer Part Number"
+                and isinstance(aliases, list)
+                and "MPN" in aliases
+            ):
+                migrated_aliases = [alias for alias in aliases if alias != "MPN"]
+                if "Manufacturer Part Number" not in migrated_aliases:
+                    migrated_aliases.insert(0, "Manufacturer Part Number")
+                migrated_rule["canonical"] = "MPN"
+                migrated_rule["aliases"] = migrated_aliases
+                changed = True
+        elif (
+            rule_id == "mpn-character-shape"
+            and migrated_rule.get("field") == "Manufacturer Part Number"
+        ):
+            migrated_rule["field"] = "MPN"
+            changed = True
+
+        migrated_rules.append(migrated_rule)
+
+    if not changed:
+        return data
+
+    migrated_data = dict(data)
+    migrated_data["rules"] = migrated_rules
+    return migrated_data
 
 
 def _validate_rule_payload(rule_type: str, data: dict[str, Any]) -> None:

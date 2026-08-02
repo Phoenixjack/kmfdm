@@ -28,6 +28,7 @@ from kmfdm.config.policy import (
     load_bundled_policy_profiles,
     load_policy_profile,
     load_policy_profiles,
+    save_policy_profile,
 )
 
 __all__ = [
@@ -54,6 +55,7 @@ __all__ = [
     "load_policy_profile",
     "load_policy_profiles",
     "matching_symbol_library_for_footprint",
+    "save_policy_profile",
     "save_workspace_config",
     "workspace_setup_issue",
 ]

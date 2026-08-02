@@ -16,5 +16,6 @@ dist/
 
 .kmfdm-history.jsonl
 .kmfdm-workspace.json
+.kmfdm-policies/
 *.bak
 *.tmp

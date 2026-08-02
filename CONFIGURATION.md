@@ -77,13 +77,19 @@ split-type-roots
 
 The Configuration dialog lets users choose one of these shipped example layouts. Later setup work should allow users to customize path templates or start from autodetected suggestions.
 
-The first code foundation for layout profiles is a parser/validator for the example JSON files, persisted GUI selection, and an in-dialog details panel that explains the selected profile. Path-template rendering and filesystem scanning are intentionally separate later steps.
+The first code foundation for layout profiles is a parser/validator for the example JSON files, persisted GUI selection, and an in-dialog details panel that explains the selected profile. Path-template rendering is intentionally separate from the read-only filesystem scan.
 
 ## First-Run and Repair Setup
 
 KMFDM should eventually offer a guided setup when local configuration is missing, invalid, or intentionally recreated.
 
 The first setup behavior is intentionally small: when KMFDM starts without a workspace config, with an unreadable workspace config, or without a selected layout profile, it opens Configuration and requires a layout choice before continuing.
+
+When configured libraries are present, KMFDM builds the main window first and then scans KiCad libraries in the background. A no-button loading progress dialog shows scan percentage, and the Symbols and Footprints inspector panels mirror the same loading status.
+
+The Symbols and Footprints tabs include live filter pills for `Unsaved`, `Warnings`, and `Errors`. The warning and error counts report issue totals for the current tab, and the unsaved count reports rows with pending cell changes. Green pills indicate a zero count; yellow and red pills indicate outstanding warnings or errors. Multiple active status filters are combined as an OR filter.
+
+The first save path is intentionally narrow. Save Selected on the Symbols and Footprints tabs writes included changed metadata cells back to scanned KiCad `.kicad_sym` and `.kicad_mod` files. Symbol saves update or add direct `property` nodes on the selected symbol. Footprint saves update or add direct `property` nodes, with footprint `Value` using `fp_text value` when no `Value` property exists. Existing values are updated with a span-based S-expression pass so surrounding comments and formatting are preserved where practical. KMFDM does not edit symbol graphics, pins, footprint pads, or footprint geometry. Safe-save staging, backups, external modification detection, and history sidecar entries are still later hardening work.
 
 Setup goals:
 
@@ -176,9 +182,13 @@ These files are disabled-by-default examples for likely policy families:
 - `manufacturer-part-policy.json`
 
 The GUI loads the same starter policies from bundled application resources so the Audit tab can show them outside a source checkout.
-The Audit tab lets users adjust each policy's enabled state, apply-to-new-libraries behavior, symbol/footprint target, KiCad-style severity, and installed-library applicability. The installed-library table shows per-library violation counts for the selected policy. Symbols and Footprints remain the primary tabs for inspecting individual findings. Findings are attached to visible table cells, so the cell background, tooltip, and inspector show the same issue context.
+The Audit tab lets users adjust each policy's enabled state, apply-to-new-libraries behavior, symbol/footprint target, KiCad-style severity, and installed-library applicability. The installed-library table shows per-library violation counts for the selected policy. Symbols and Footprints remain the primary tabs for inspecting individual findings. Findings are attached to visible table cells, so the cell background, tooltip, and inspector show the same issue context. Policy changes refresh findings immediately, show an unsaved marker in the policy list, and are written to the workspace when Save Selected is used from the Audit tab.
 
-The starter library validation policy begins with GRAPHICS libraries unchecked in the Audit tab instead of using wildcard exemptions. Users can still opt those libraries into the policy manually. Wildcard and regex-based applicability controls are deferred until the basic policy workflow is proven.
+Policy details include an advisory Related field coverage section when the selected policy checks fields that also appear in other policies. This is not a full conflict detector yet; it is a first-pass signal that rules may overlap.
+
+When a bundled policy is edited in the Rule Editor and saved, KMFDM writes a workspace override copy under `.kmfdm-policies/` and records it in `.kmfdm-workspace.json` through `policy_files`. On the next launch, workspace policy files override bundled policies with the same policy id. Audit tab settings are saved in the workspace configuration under `kia_interop.audit_policy_settings`. Revert Selected restores the selected policy and settings to the last saved state; Revert All does the same for every Audit policy. The first Rule Editor implementation can create and edit required-field and regex rules, and can delete any selected rule after confirmation.
+
+The starter library validation policy begins with GRAPHICS libraries unchecked in the Audit tab instead of using wildcard exemptions, and the policy details panel calls out that default. Users can still opt those libraries into the policy manually. Wildcard and regex-based applicability controls are deferred until the basic policy workflow is proven.
 
 Supported first-pass rule types:
 

@@ -24,6 +24,8 @@
 - Build out the Changes tab with mock change groups and per-change inclusion controls.
 - Build the selective preview dialog using mock changes.
 - Build a prototype History tab for `.kmfdm-history.jsonl` entries.
+- Add safe-save staging, backups, validation, rollback, and external modification detection.
+- Add sidecar history writes for saved metadata changes.
 - Add status-bar counts for loaded libraries, items, issues, and pending changes.
 - Add table filtering for issues and pending changes.
 - Expand source-library and column filters after real KiCad scans replace mock data.
@@ -33,11 +35,10 @@
 
 ## After the GUI Slice Feels Right
 
-- Persist Audit tab policy settings across launches.
 - Add policy-file selection for workspace-specific policy profiles.
 - Expand Help policy guidance after policy behavior exists.
 - Add more user-adjustable audit rules after the starter scanned-data policy flow is validated.
-- Connect the Rule Editor dialog to real policy mutation and workspace persistence.
+- Expand Rule Editor support beyond required-field and regex rules.
 - Add a regex-builder assistant and stronger live rule preview against selected library rows.
 - Add wildcard and regex applicability controls for selected fields and libraries.
 
@@ -46,9 +47,9 @@
 - Add an optional lower-right symbol/footprint preview panel using KiCad CLI SVG export when a KiCad CLI path is configured or discoverable.
 - Add a read-only layout scanner that can suggest likely layout profiles from a selected library root.
 - Add user-customizable layout profile editing after bundled starter profiles are proven useful.
-- Add safe-save staging, backups, validation, and rollback.
-- Add sidecar history writes.
-- Add external modification detection.
+- Add unmatched symbol/footprint path suggestions and guided relink repair workflows.
+- Add mixed-layout detection and advisory cleanup/migration workflows for inconsistent custom library structures.
+- Add full policy conflict diagnostics for overlapping rules that affect the same fields, targets, libraries, or severities.
 - Add richer link validation.
 
 ## KIA / KMFDM Shared Configuration Goals

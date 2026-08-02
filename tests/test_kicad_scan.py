@@ -1,7 +1,7 @@
 from kmfdm.config import LibrarySelection, WorkspaceConfig
 from kmfdm.gui.main_window import configured_table_items_from_workspace
 from kmfdm.parsers.sexpr import parse_sexpressions, sexpr_head
-from kmfdm.services.kicad_scan import scan_footprint_library, scan_symbol_library
+from kmfdm.services.kicad_scan import scan_footprint_library, scan_symbol_library, scan_workspace_libraries
 
 
 def test_parse_sexpressions_builds_tree_with_quoted_values() -> None:
@@ -112,3 +112,36 @@ def test_configured_table_items_use_scanned_kicad_data(tmp_path) -> None:
     assert footprint_items[0].display_library == "ICs"
     assert footprint_items[0].cells["Value"].working_value == "TPS54560_FOOTPRINT"
     assert footprint_items[0].metadata_fields["3D Model"] == "${CHRIS_KICAD_LIB}/ICs.pretty/TPS54560.step"
+
+
+def test_workspace_scan_reports_progress_for_symbol_libraries_and_footprint_files(tmp_path) -> None:
+    symbol_path = tmp_path / "ICs.pretty" / "ICs.kicad_sym"
+    symbol_path.parent.mkdir()
+    symbol_path.write_text(
+        """
+        (kicad_symbol_lib
+          (symbol "TPS54560" (property "Value" "TPS54560"))
+        )
+        """,
+        encoding="utf-8",
+    )
+    for footprint_name in ["TPS54560", "TPS54331"]:
+        (symbol_path.parent / f"{footprint_name}.kicad_mod").write_text(
+            f'(footprint "{footprint_name}" (fp_text value "{footprint_name}" (at 0 0 0)))',
+            encoding="utf-8",
+        )
+    progress_events = []
+
+    scan_workspace_libraries(
+        WorkspaceConfig(
+            symbol_libraries=[LibrarySelection(str(symbol_path))],
+            footprint_libraries=[LibrarySelection(str(symbol_path.parent))],
+        ),
+        progress_callback=lambda completed, total, message: progress_events.append(
+            (completed, total, message)
+        ),
+    )
+
+    assert [event[0] for event in progress_events] == [1, 2, 3]
+    assert {event[1] for event in progress_events} == {3}
+    assert progress_events[-1][2].startswith("Scanned footprint")

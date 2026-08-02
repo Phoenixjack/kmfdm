@@ -27,13 +27,32 @@ def test_policy_audit_reports_alias_field_name() -> None:
             item_type="symbol",
             library="Analog",
             name="TPS54560",
+            fields={"Value": "TPS54560", "Manufacturer Part Number": "TPS54560BDDAR"},
+        )
+    ]
+
+    findings = audit_items_against_policies(items, policies)
+
+    assert any(
+        finding.rule_id == "mpn-aliases" and finding.field == "Manufacturer Part Number"
+        for finding in findings
+    )
+
+
+def test_policy_audit_accepts_mpn_as_preferred_part_number_field() -> None:
+    policies = load_policy_profiles_from_examples()
+    items = [
+        AuditItem(
+            item_type="symbol",
+            library="Analog",
+            name="TPS54560",
             fields={"Value": "TPS54560", "MPN": "TPS54560BDDAR"},
         )
     ]
 
     findings = audit_items_against_policies(items, policies)
 
-    assert any(finding.rule_id == "mpn-aliases" and finding.field == "MPN" for finding in findings)
+    assert not any(finding.rule_id == "mpn-aliases" for finding in findings)
 
 
 def test_policy_audit_reports_max_length() -> None:
@@ -75,7 +94,7 @@ def test_policy_audit_reports_regex_mismatch() -> None:
             item_type="symbol",
             library="Analog",
             name="BadPart",
-            fields={"Manufacturer Part Number": "BAD PART NUMBER"},
+            fields={"MPN": "BAD PART NUMBER"},
         )
     ]
 

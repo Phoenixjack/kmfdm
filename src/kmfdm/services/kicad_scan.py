@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from kmfdm.config import LibrarySelection, WorkspaceConfig
 from kmfdm.parsers.sexpr import SExpr, parse_sexpressions, sexpr_head
+
+
+ScanProgressCallback = Callable[[int, int, str], None]
 
 
 @dataclass(frozen=True)
@@ -18,11 +22,36 @@ class KiCadLibraryItem:
 
 def scan_workspace_libraries(
     config: WorkspaceConfig,
+    progress_callback: ScanProgressCallback | None = None,
 ) -> tuple[list[KiCadLibraryItem], list[KiCadLibraryItem]]:
-    return (
-        scan_symbol_libraries(config.symbol_libraries),
-        scan_footprint_libraries(config.footprint_libraries),
-    )
+    symbol_paths = _enabled_library_paths(config.symbol_libraries)
+    footprint_files = _enabled_footprint_files(config.footprint_libraries)
+    total_steps = len(symbol_paths) + len(footprint_files)
+    completed_steps = 0
+
+    symbol_items: list[KiCadLibraryItem] = []
+    for path in symbol_paths:
+        symbol_items.extend(scan_symbol_library(path))
+        completed_steps += 1
+        _report_progress(
+            progress_callback,
+            completed_steps,
+            total_steps,
+            f"Scanned symbol library {path.name}",
+        )
+
+    footprint_items: list[KiCadLibraryItem] = []
+    for path in footprint_files:
+        footprint_items.extend(_scan_footprint_file(path))
+        completed_steps += 1
+        _report_progress(
+            progress_callback,
+            completed_steps,
+            total_steps,
+            f"Scanned footprint {path.name}",
+        )
+
+    return symbol_items, footprint_items
 
 
 def scan_symbol_libraries(selections: list[LibrarySelection]) -> list[KiCadLibraryItem]:
@@ -82,6 +111,35 @@ def scan_footprint_library(path: Path) -> list[KiCadLibraryItem]:
         for file_path in file_paths
         for item in _scan_footprint_file(file_path)
     ]
+
+
+def _enabled_library_paths(selections: list[LibrarySelection]) -> list[Path]:
+    return [Path(selection.path) for selection in selections if selection.enabled]
+
+
+def _enabled_footprint_files(selections: list[LibrarySelection]) -> list[Path]:
+    file_paths: list[Path] = []
+    for selection in selections:
+        if not selection.enabled:
+            continue
+        library_path = Path(selection.path)
+        if not library_path.is_dir():
+            continue
+        try:
+            file_paths.extend(sorted(library_path.glob("*.kicad_mod")))
+        except OSError:
+            continue
+    return file_paths
+
+
+def _report_progress(
+    progress_callback: ScanProgressCallback | None,
+    completed_steps: int,
+    total_steps: int,
+    message: str,
+) -> None:
+    if progress_callback is not None:
+        progress_callback(completed_steps, total_steps, message)
 
 
 def _scan_footprint_file(path: Path) -> list[KiCadLibraryItem]:

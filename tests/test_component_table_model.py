@@ -1,10 +1,15 @@
+from dataclasses import replace
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox
 
 from kmfdm.config import (
     LibrarySelection,
+    PolicyRule,
     WorkspaceConfig,
     load_bundled_policy_profiles,
+    load_policy_profile,
+    load_workspace_config,
     save_workspace_config,
 )
 from kmfdm.gui.main_window import (
@@ -18,11 +23,14 @@ from kmfdm.gui.main_window import (
     attach_policy_findings_to_mock_items,
     audit_policy_settings_from_profiles,
     configured_symbol_items,
+    configured_table_items_from_workspace,
     mock_audit_items,
     mock_footprint_items,
     mock_symbol_items,
+    _audit_policy_settings_to_dict,
+    _audit_policy_settings_overrides_from_config,
 )
-from kmfdm.models import CellState
+from kmfdm.models import CellState, Issue, IssueSeverity
 from kmfdm.services.policy_audit import audit_items_against_policies
 
 
@@ -54,6 +62,7 @@ def test_apply_checkbox_can_be_unchecked_and_checked_again() -> None:
 def test_policy_finding_attaches_to_matching_mock_cell() -> None:
     symbol_items = mock_symbol_items()
     footprint_items = mock_footprint_items()
+    symbol_items[0].cells["MPN"].working_value = "BAD PART NUMBER"
     findings = audit_items_against_policies(
         mock_audit_items(symbol_items, footprint_items),
         load_bundled_policy_profiles(),
@@ -62,9 +71,9 @@ def test_policy_finding_attaches_to_matching_mock_cell() -> None:
     attach_policy_findings_to_mock_items(symbol_items, footprint_items, findings)
 
     tps_mpn = symbol_items[0].cells["MPN"]
-    assert any(issue.rule_name == "Manufacturer part-number aliases" for issue in tps_mpn.issues)
+    assert any(issue.rule_name == "Manufacturer part number uses expected characters" for issue in tps_mpn.issues)
     assert any(issue.policy_name == "Manufacturer Part Policy" for issue in tps_mpn.issues)
-    assert "Manufacturer part-number aliases" in tps_mpn.tooltip_text()
+    assert "Manufacturer part number uses expected characters" in tps_mpn.tooltip_text()
     assert "Policy: Manufacturer Part Policy" in tps_mpn.tooltip_text()
 
 
@@ -112,6 +121,38 @@ def test_component_filter_proxy_limits_rows_by_source_library() -> None:
     proxy.set_enabled_libraries(set())
 
     assert proxy.rowCount() == 0
+
+
+def test_component_filter_proxy_limits_rows_by_status_filters() -> None:
+    items = [
+        MockItem("Analog", "Changed", {"Value": CellState("old", "new")}),
+        MockItem(
+            "Analog",
+            "Warning",
+            {"Value": CellState(issues=[Issue(IssueSeverity.WARNING, "Warn", "")])},
+        ),
+        MockItem(
+            "Analog",
+            "Error",
+            {"Value": CellState(issues=[Issue(IssueSeverity.ERROR, "Err", "")])},
+        ),
+        MockItem("Analog", "Clean", {"Value": CellState("clean", "clean")}),
+    ]
+    model = ComponentTableModel(items)
+    proxy = ComponentFilterProxyModel()
+    proxy.setSourceModel(model)
+    proxy.set_enabled_libraries({"Analog"})
+
+    assert proxy.rowCount() == 4
+
+    proxy.set_status_filters(unsaved=True, warnings=False, errors=False)
+
+    assert proxy.rowCount() == 1
+    assert proxy.data(proxy.index(0, model.columns.index("Name")), Qt.DisplayRole) == "Changed"
+
+    proxy.set_status_filters(unsaved=False, warnings=True, errors=True)
+
+    assert proxy.rowCount() == 2
 
 
 def test_multi_select_filter_button_select_all_and_none(qtbot) -> None:
@@ -191,6 +232,34 @@ def test_main_window_refreshes_table_filters_from_workspace_config(qtbot, monkey
     assert window.footprint_tab_state.model.rowCount() == 2
 
 
+def test_main_window_constructs_before_deferred_library_load(qtbot, monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    symbol_path = tmp_path / "ICs.pretty" / "ICs.kicad_sym"
+    symbol_path.parent.mkdir()
+    symbol_path.write_text(
+        """
+        (kicad_symbol_lib
+          (symbol "TPS54560" (property "Value" "TPS54560"))
+        )
+        """,
+        encoding="utf-8",
+    )
+    config_path = tmp_path / ".kmfdm-workspace.json"
+    save_workspace_config(
+        WorkspaceConfig(
+            layout_profile_id="flat-contained-symbols",
+            symbol_libraries=[LibrarySelection(str(symbol_path))],
+        ),
+        config_path,
+    )
+
+    window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(window)
+
+    assert window.symbol_tab_state.model.rowCount() == 0
+    assert window.symbol_tab_state.inspector.label.text() == "Library data has not loaded yet."
+
+
 def test_main_window_library_filter_aliases_are_unique(qtbot, monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / ".kmfdm-workspace.json"
@@ -228,6 +297,58 @@ def test_audit_items_include_full_metadata_fields_from_scanned_rows() -> None:
 
     assert audit_items[0].fields["Footprint"] == "ICs:TPS54560"
     assert audit_items[2].fields["3D Model"] == "${CHRIS_KICAD_LIB}/ICs.pretty/TPS54560.step"
+    assert audit_items[0].fields["Value"] == "TPS54560"
+
+
+def test_audit_items_include_canonical_table_fields_when_raw_metadata_uses_aliases() -> None:
+    symbol_items = [
+        MockItem(
+            "CONNECTORs.pretty/CONNECTORs.kicad_sym",
+            "CONN_HDMI",
+            {
+                "Manufacturer": CellState("Stewart Connector", "Stewart Connector"),
+                "MPN": CellState("SS-53000-003", "SS-53000-003"),
+            },
+            metadata_fields={
+                "MANUFACTURER": "Stewart Connector",
+                "MPN": "SS-53000-003",
+            },
+        )
+    ]
+
+    audit_item = mock_audit_items(symbol_items=symbol_items, footprint_items=[])[0]
+
+    assert audit_item.fields["MANUFACTURER"] == "Stewart Connector"
+    assert audit_item.fields["Manufacturer"] == "Stewart Connector"
+
+
+def test_manufacturer_required_policy_accepts_displayed_alias_value() -> None:
+    symbol_items = [
+        MockItem(
+            "CONNECTORs.pretty/CONNECTORs.kicad_sym",
+            "CONN_HDMI",
+            {
+                "Manufacturer": CellState("Stewart Connector", "Stewart Connector"),
+                "MPN": CellState("SS-53000-003", "SS-53000-003"),
+            },
+            metadata_fields={
+                "MANUFACTURER": "Stewart Connector",
+                "MPN": "SS-53000-003",
+            },
+        )
+    ]
+    policy = next(
+        profile
+        for profile in load_bundled_policy_profiles()
+        if profile.profile_id == "manufacturer-part-policy"
+    )
+
+    findings = audit_items_against_policies(
+        mock_audit_items(symbol_items=symbol_items, footprint_items=[]),
+        [policy],
+    )
+
+    assert not any(finding.rule_id == "manufacturer-required" for finding in findings)
 
 
 def test_library_validation_policy_defaults_graphics_to_unchecked() -> None:
@@ -276,44 +397,7 @@ def test_audit_library_table_filters_by_target_and_shows_violation_placeholders(
     save_workspace_config(WorkspaceConfig(layout_profile_id="flat-contained-symbols"), config_path)
     window = MainWindow(workspace_config_path=config_path)
     qtbot.addWidget(window)
-    window.symbol_items = [
-        MockItem(
-            "GRAPHICS.pretty/GRAPHICS.kicad_sym",
-            "SYM_Arrow",
-            {"Value": CellState("", "")},
-            library_alias="GRAPHICS",
-            metadata_fields={"Value": "SYM_Arrow", "Datasheet": "", "Footprint": ""},
-        ),
-        MockItem(
-            "CONNECTORs.pretty/CONNECTORs.kicad_sym",
-            "CONN_HDMI",
-            {"Value": CellState("", "")},
-            library_alias="CONNECTORs",
-            metadata_fields={"Value": "CONN_HDMI", "Datasheet": "", "Footprint": ""},
-        ),
-    ]
-    window.footprint_items = [
-        MockItem(
-            "GRAPHICS.pretty",
-            "Logo",
-            {"Value": CellState("", "")},
-            library_alias="GRAPHICS",
-            metadata_fields={"Value": "Logo", "3D Model": ""},
-        ),
-        MockItem(
-            "CONNECTORs.pretty",
-            "CONN_HDMI",
-            {"Value": CellState("", "")},
-            library_alias="CONNECTORs",
-            metadata_fields={"Value": "CONN_HDMI", "3D Model": ""},
-        ),
-    ]
-    window.audit_policy_settings = audit_policy_settings_from_profiles(
-        window.policy_profiles,
-        window.symbol_items,
-        window.footprint_items,
-    )
-    window._refresh_policy_findings()
+    _install_graphics_and_connector_items(window)
     _select_policy(window, "library-validation-policy")
 
     rows = _audit_library_rows(window)
@@ -328,6 +412,29 @@ def test_audit_library_table_filters_by_target_and_shows_violation_placeholders(
 
     rows = _audit_library_rows(window)
     assert set(rows) == {"GRAPHICS.pretty", "CONNECTORs.pretty"}
+
+
+def test_audit_library_applicability_is_policy_specific(qtbot, monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / ".kmfdm-workspace.json"
+    save_workspace_config(WorkspaceConfig(layout_profile_id="flat-contained-symbols"), config_path)
+    window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(window)
+    _install_graphics_and_connector_items(window)
+
+    _select_policy(window, "library-validation-policy")
+    _audit_library_item(window, "GRAPHICS.pretty").setCheckState(Qt.CheckState.Checked)
+    _audit_library_item(window, "GRAPHICS.pretty/GRAPHICS.kicad_sym").setCheckState(Qt.CheckState.Checked)
+    assert "Default applicability" in window.audit_policy_details.label.text()
+
+    _select_policy(window, "datasheet-link-policy")
+    _audit_library_item(window, "GRAPHICS.pretty").setCheckState(Qt.CheckState.Unchecked)
+    _audit_library_item(window, "GRAPHICS.pretty/GRAPHICS.kicad_sym").setCheckState(Qt.CheckState.Unchecked)
+    assert "Related field coverage" in window.audit_policy_details.label.text()
+
+    _select_policy(window, "library-validation-policy")
+    assert _audit_library_item(window, "GRAPHICS.pretty").checkState() == Qt.CheckState.Checked
+    assert _audit_library_item(window, "GRAPHICS.pretty/GRAPHICS.kicad_sym").checkState() == Qt.CheckState.Checked
 
 
 def test_rule_editor_regex_preview_reports_pass_fail_and_invalid(qtbot) -> None:
@@ -347,6 +454,324 @@ def test_rule_editor_regex_preview_reports_pass_fail_and_invalid(qtbot) -> None:
     dialog.regex_input.setText("[")
 
     assert dialog.regex_result.text().startswith("Invalid regex")
+
+
+def test_rule_editor_builds_required_field_rule(qtbot) -> None:
+    dialog = RuleEditorDialog(["MPN"])
+    qtbot.addWidget(dialog)
+    dialog.name_input.setText("MPN is present")
+    dialog.field_combo.setCurrentText("MPN")
+    dialog.required_checkbox.setChecked(True)
+
+    rule = dialog.to_rule(existing_rule_ids=[])
+
+    assert rule.rule_id == "mpn-is-present"
+    assert rule.name == "MPN is present"
+    assert rule.rule_type == "required_field"
+    assert rule.parameters == {"field": "MPN"}
+
+
+def test_rule_editor_builds_regex_rule_with_blank_handling(qtbot) -> None:
+    dialog = RuleEditorDialog(["MPN"])
+    qtbot.addWidget(dialog)
+    dialog.name_input.setText("MPN shape")
+    dialog.field_combo.setCurrentText("MPN")
+    dialog.regex_enabled_checkbox.setChecked(True)
+    dialog.regex_input.setText(r"^[A-Z0-9_.-]+$")
+
+    rule = dialog.to_rule(existing_rule_ids=[])
+
+    assert rule.rule_type == "regex_check"
+    assert rule.parameters["field"] == "MPN"
+    assert rule.parameters["pattern"] == r"^[A-Z0-9_.-]+$"
+    assert rule.parameters["mode"] == "contains_match"
+    assert rule.parameters["ignore_blank"] is True
+
+    dialog.required_checkbox.setChecked(True)
+
+    assert dialog.to_rule(existing_rule_ids=[]).parameters["ignore_blank"] is False
+
+
+def test_main_window_policy_replacement_persists_workspace_override(qtbot, monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / ".kmfdm-workspace.json"
+    save_workspace_config(WorkspaceConfig(layout_profile_id="flat-contained-symbols"), config_path)
+    window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(window)
+    _select_policy(window, "minimal-library-policy")
+    profile = window._current_audit_policy()
+    assert profile is not None
+    rule = PolicyRule(
+        rule_id="local-test-rule",
+        name="Local Test Rule",
+        rule_type="required_field",
+        target="both",
+        severity="warning",
+        save_behavior="advisory",
+        parameters={"field": "MPN"},
+    )
+
+    window._replace_current_policy(replace(profile, rules=[*profile.rules, rule]))
+
+    policy_path = tmp_path / ".kmfdm-policies" / "minimal-library-policy.json"
+    assert not policy_path.exists()
+    assert window.audit_policy_list.currentItem().text().endswith(" *")
+
+    window.tabs.setCurrentIndex(2)
+    window._save_selected()
+
+    saved_profile = load_policy_profile(policy_path)
+    saved_config = load_workspace_config(config_path)
+    assert any(saved_rule.rule_id == "local-test-rule" for saved_rule in saved_profile.rules)
+    assert saved_config.policy_files == [LibrarySelection(str(policy_path))]
+    assert window.audit_policy_list.currentItem().text().endswith(
+        f"({len(profile.rules) + 1} rules)"
+    )
+    reloaded_window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(reloaded_window)
+    _select_policy(reloaded_window, "minimal-library-policy")
+    assert any(
+        saved_rule.rule_id == "local-test-rule"
+        for saved_rule in reloaded_window._current_audit_policy().rules
+    )
+
+
+def test_main_window_rule_delete_persists_workspace_override(qtbot, monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / ".kmfdm-workspace.json"
+    save_workspace_config(WorkspaceConfig(layout_profile_id="flat-contained-symbols"), config_path)
+    window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(window)
+    _select_policy(window, "minimal-library-policy")
+    profile = window._current_audit_policy()
+    assert profile is not None
+    original_rule_count = len(profile.rules)
+    monkeypatch.setattr(
+        "kmfdm.gui.main_window.QMessageBox.question",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    window._delete_current_rule()
+
+    policy_path = tmp_path / ".kmfdm-policies" / "minimal-library-policy.json"
+    assert not policy_path.exists()
+    assert len(window._current_audit_policy().rules) == original_rule_count - 1
+
+    window.tabs.setCurrentIndex(2)
+    window._save_selected()
+
+    saved_profile = load_policy_profile(policy_path)
+    assert len(saved_profile.rules) == original_rule_count - 1
+    assert len(window._current_audit_policy().rules) == original_rule_count - 1
+
+
+def test_main_window_audit_settings_save_and_reload(qtbot, monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / ".kmfdm-workspace.json"
+    save_workspace_config(WorkspaceConfig(layout_profile_id="flat-contained-symbols"), config_path)
+    window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(window)
+    _install_graphics_and_connector_items(window)
+    _select_policy(window, "datasheet-link-policy")
+
+    window.audit_enabled_checkbox.setChecked(False)
+    window.audit_severity_error.setChecked(True)
+    _audit_library_item(window, "GRAPHICS.pretty").setCheckState(Qt.CheckState.Unchecked)
+    assert window.audit_policy_list.currentItem().text().endswith(" *")
+
+    window.tabs.setCurrentIndex(2)
+    window._save_selected()
+
+    reloaded_window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(reloaded_window)
+    _install_graphics_and_connector_items(reloaded_window)
+    _select_policy(reloaded_window, "datasheet-link-policy")
+    settings = reloaded_window._current_audit_policy_settings()
+    assert settings is not None
+    assert not settings.enabled
+    assert settings.severity == "error"
+    assert "GRAPHICS.pretty" not in settings.enabled_libraries
+
+
+def test_main_window_revert_selected_discards_unsaved_audit_settings(
+    qtbot,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / ".kmfdm-workspace.json"
+    save_workspace_config(WorkspaceConfig(layout_profile_id="flat-contained-symbols"), config_path)
+    window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(window)
+    _install_graphics_and_connector_items(window)
+    _select_policy(window, "library-validation-policy")
+
+    _audit_library_item(window, "GRAPHICS.pretty").setCheckState(Qt.CheckState.Checked)
+    assert "GRAPHICS.pretty" in window._current_audit_policy_settings().enabled_libraries
+
+    window.tabs.setCurrentIndex(2)
+    window._revert_selected()
+
+    settings = window._current_audit_policy_settings()
+    assert settings is not None
+    assert "GRAPHICS.pretty" not in settings.enabled_libraries
+    assert window.audit_policy_list.currentItem().text().endswith("(4 rules)")
+
+
+def test_audit_action_buttons_follow_selected_policy_dirty_state(
+    qtbot,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / ".kmfdm-workspace.json"
+    save_workspace_config(WorkspaceConfig(layout_profile_id="flat-contained-symbols"), config_path)
+    window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(window)
+    window.tabs.setCurrentIndex(2)
+    _select_policy(window, "datasheet-link-policy")
+
+    assert not window.save_selected_button.isEnabled()
+    assert not window.revert_selected_button.isEnabled()
+    assert not window.revert_all_button.isEnabled()
+
+    window.audit_severity_error.setChecked(True)
+
+    assert window.save_selected_button.isEnabled()
+    assert window.revert_selected_button.isEnabled()
+    assert window.revert_all_button.isEnabled()
+
+    window._save_selected()
+
+    assert not window.save_selected_button.isEnabled()
+    assert not window.revert_selected_button.isEnabled()
+    assert not window.revert_all_button.isEnabled()
+
+
+def test_bottom_action_buttons_are_tab_dirty_state_specific(
+    qtbot,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / ".kmfdm-workspace.json"
+    save_workspace_config(WorkspaceConfig(layout_profile_id="flat-contained-symbols"), config_path)
+    window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(window)
+    window.symbol_items = [
+        MockItem(
+            "Analog.pretty/Analog.kicad_sym",
+            "TPS54560",
+            {"Value": CellState("TPS54560", "TPS54560")},
+            library_alias="Analog",
+        )
+    ]
+    window._refresh_library_tab(window.symbol_tab_state, window.symbol_items)
+    window.tabs.setCurrentIndex(0)
+
+    assert not window.save_selected_button.isEnabled()
+    assert not window.revert_selected_button.isEnabled()
+    assert not window.revert_all_button.isEnabled()
+
+    value_index = window.symbol_tab_state.model.index(0, window.symbol_tab_state.model.columns.index("Value"))
+    assert window.symbol_tab_state.model.setData(value_index, "TPS54560A", Qt.EditRole)
+
+    assert window.save_selected_button.isEnabled()
+    assert window.revert_selected_button.isEnabled()
+    assert window.revert_all_button.isEnabled()
+
+    window.tabs.setCurrentIndex(2)
+
+    assert not window.save_selected_button.isEnabled()
+    assert not window.revert_selected_button.isEnabled()
+    assert not window.revert_all_button.isEnabled()
+
+    window.tabs.setCurrentIndex(0)
+
+    assert window.save_selected_button.isEnabled()
+    assert window.revert_selected_button.isEnabled()
+    assert window.revert_all_button.isEnabled()
+
+
+def test_library_tab_status_filter_buttons_show_counts_and_filter_rows(
+    qtbot,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / ".kmfdm-workspace.json"
+    save_workspace_config(WorkspaceConfig(layout_profile_id="flat-contained-symbols"), config_path)
+    window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(window)
+    window.symbol_items = [
+        MockItem("Analog", "Changed", {"Value": CellState("old", "new")}),
+        MockItem(
+            "Analog",
+            "Warning",
+            {"Value": CellState(issues=[Issue(IssueSeverity.WARNING, "Warn", "")])},
+        ),
+        MockItem(
+            "Analog",
+            "Error",
+            {"Value": CellState(issues=[Issue(IssueSeverity.ERROR, "Err", "")])},
+        ),
+        MockItem("Analog", "Clean", {"Value": CellState("clean", "clean")}),
+    ]
+
+    window._refresh_library_tab(window.symbol_tab_state, window.symbol_items)
+
+    assert window.symbol_tab_state.unsaved_filter.text() == "Unsaved: 1"
+    assert window.symbol_tab_state.warning_filter.text() == "Warnings: 1"
+    assert window.symbol_tab_state.error_filter.text() == "Errors: 1"
+
+    window.symbol_tab_state.warning_filter.setChecked(True)
+
+    assert window.symbol_tab_state.proxy_model.rowCount() == 1
+
+    window.symbol_tab_state.error_filter.setChecked(True)
+
+    assert window.symbol_tab_state.proxy_model.rowCount() == 2
+
+
+def test_save_selected_writes_symbol_metadata_and_clears_dirty_state(
+    qtbot,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    symbol_path = tmp_path / "ICs.pretty" / "ICs.kicad_sym"
+    symbol_path.parent.mkdir()
+    symbol_path.write_text(
+        """
+        (kicad_symbol_lib
+          (symbol "TPS54560"
+            (property "Value" "TPS54560")
+          )
+        )
+        """,
+        encoding="utf-8",
+    )
+    config = WorkspaceConfig(
+        layout_profile_id="flat-contained-symbols",
+        symbol_libraries=[LibrarySelection(str(symbol_path))],
+    )
+    config_path = tmp_path / ".kmfdm-workspace.json"
+    save_workspace_config(config, config_path)
+    window = MainWindow(workspace_config_path=config_path)
+    qtbot.addWidget(window)
+    window.symbol_items, window.footprint_items = configured_table_items_from_workspace(config)
+    window._refresh_library_tab(window.symbol_tab_state, window.symbol_items)
+    window.tabs.setCurrentIndex(0)
+
+    value_index = window.symbol_tab_state.model.index(0, window.symbol_tab_state.model.columns.index("Value"))
+    assert window.symbol_tab_state.model.setData(value_index, "TPS54560A", Qt.EditRole)
+
+    window._save_selected()
+
+    assert '(property "Value" "TPS54560A")' in symbol_path.read_text(encoding="utf-8")
+    assert window.symbol_items[0].cells["Value"].original_value == "TPS54560A"
+    assert not window.symbol_items[0].cells["Value"].is_changed
+    assert not window.save_selected_button.isEnabled()
 
 
 def test_configuration_dialog_chooses_symbol_library_when_footprint_has_multiple_candidates(
@@ -419,6 +844,60 @@ def _select_policy(window: MainWindow, profile_id: str) -> None:
             window.audit_policy_list.setCurrentRow(row)
             return
     raise AssertionError(f"Policy not found: {profile_id}")
+
+
+def _install_graphics_and_connector_items(window: MainWindow) -> None:
+    window.symbol_items = [
+        MockItem(
+            "GRAPHICS.pretty/GRAPHICS.kicad_sym",
+            "SYM_Arrow",
+            {"Value": CellState("", "")},
+            library_alias="GRAPHICS",
+            metadata_fields={"Value": "SYM_Arrow", "Datasheet": "", "Footprint": ""},
+        ),
+        MockItem(
+            "CONNECTORs.pretty/CONNECTORs.kicad_sym",
+            "CONN_HDMI",
+            {"Value": CellState("", "")},
+            library_alias="CONNECTORs",
+            metadata_fields={"Value": "CONN_HDMI", "Datasheet": "", "Footprint": ""},
+        ),
+    ]
+    window.footprint_items = [
+        MockItem(
+            "GRAPHICS.pretty",
+            "Logo",
+            {"Value": CellState("", "")},
+            library_alias="GRAPHICS",
+            metadata_fields={"Value": "Logo", "3D Model": ""},
+        ),
+        MockItem(
+            "CONNECTORs.pretty",
+            "CONN_HDMI",
+            {"Value": CellState("", "")},
+            library_alias="CONNECTORs",
+            metadata_fields={"Value": "CONN_HDMI", "3D Model": ""},
+        ),
+    ]
+    window.audit_policy_settings = audit_policy_settings_from_profiles(
+        window.policy_profiles,
+        window.symbol_items,
+        window.footprint_items,
+        _audit_policy_settings_overrides_from_config(window.workspace_config),
+    )
+    window._saved_audit_policy_settings = {
+        profile_id: _audit_policy_settings_to_dict(settings)
+        for profile_id, settings in window.audit_policy_settings.items()
+    }
+    window._refresh_policy_findings()
+
+
+def _audit_library_item(window: MainWindow, library: str):
+    for row in range(window.audit_library_table.rowCount()):
+        item = window.audit_library_table.item(row, 0)
+        if item.data(Qt.ItemDataRole.UserRole) == library:
+            return item
+    raise AssertionError(f"Audit library row not found: {library}")
 
 
 def _audit_library_rows(window: MainWindow) -> dict[str, dict[str, object]]:

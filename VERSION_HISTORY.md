@@ -9,19 +9,37 @@
 - Added a small S-expression parser for read-only KiCad library scanning.
 - Added read-only scanning for configured `.kicad_sym` symbol libraries and `.pretty/*.kicad_mod` footprint libraries.
 - Connected scanned KiCad metadata to the Symbols and Footprints table columns.
+- Added Symbols and Footprints filter pills for unsaved rows, warning issues, and error issues with live tab-local counts.
+- Allow Save Selected on Symbols and Footprints to write included changed metadata cells back to scanned KiCad symbol and footprint files.
+- Allow Revert Selected/Revert All on Symbols and Footprints to discard pending metadata cell edits on the active tab.
 - Simplified Library column and source-filter display with unique library aliases while keeping full source labels in the inspector.
 - Kept full scanned metadata available to audit rules even when fields are not visible table columns.
 - Added a starter library validation policy for datasheet, associated footprint, and 3D-model requirements.
 - Added an audit rule that checks whether a symbol Footprint field points to an existing footprint.
+- Fixed audit field preparation so policies can see canonical table fields even when raw KiCad metadata uses aliases such as `MANUFACTURER`.
+- Treat `MPN` as the preferred manufacturer part-number field in starter policies, with longer part-number field names treated as aliases.
+- Normalize older workspace Manufacturer Part Policy overrides so `MPN` is no longer flagged as an alias after policy defaults change.
 - Added Audit tab controls for policy enablement, apply-to-new-libraries behavior, symbol/footprint target, severity, and explicit per-library applicability.
 - Defaulted GRAPHICS libraries out of the starter library validation policy through unchecked library applicability instead of wildcard exemptions.
+- Added a Library Validation details note explaining the GRAPHICS default opt-out.
+- Added an advisory Related field coverage section when policies check fields that also appear in other policies.
+- Persist Audit tab policy settings through workspace configuration and reload them across launches.
+- Make Audit tab policy and rule edits pending until Save Selected, with Revert Selected and Revert All restoring the last saved audit state.
+- Disable Save Selected and Revert buttons when the current tab has no pending changes, and refresh their state when switching tabs.
+- Defer KiCad library scanning until after the main window is built, with a no-button progress dialog and mirrored loading text in the Symbols and Footprints inspectors.
+- Replaced the native bottom status bar with an inline status label beside the persistent action buttons.
+- Updated the Symbols and Footprints SVG icons with KiCad-like blue coloring and rotated the footprint glyph for closer visual parity.
+- Keep apply-to-new-libraries from re-checking installed libraries that the user manually opted out of a policy.
 - Replaced the Audit tab findings list with per-library violation counts so Symbols and Footprints remain the primary finding inspection views.
 - Reworked the Audit tab into policy, policy-details/rules, and installed-library zones.
 - Added bundled SVG tab and library-type icons for Symbols, Footprints, History, and audit library rows.
 - Create an empty contained `.kicad_sym` file after confirmation when a newly added footprint library has no symbol library.
 - Ask the user to choose the intended symbol library when a newly added footprint library has multiple `.kicad_sym` candidates.
 - Added a per-library Violations column that shows `-` for libraries outside the selected policy and counts for applied libraries.
-- Added a presentation-only Rule Editor dialog with field selection, required/regex controls, regex quick help, and live regex pass/fail preview.
+- Connected the Rule Editor dialog to create and edit required-field and regex rules.
+- Added rule deletion with confirmation from selected Audit policies.
+- Persist edited policies as workspace overrides under `.kmfdm-policies/` and reload them through workspace `policy_files`.
+- Added Rule Editor field selection, required/regex controls, regex quick help, and live regex pass/fail preview.
 - Added footprint 3D model extraction from KiCad `(model ...)` nodes.
 - Made development launcher settings resolve to the project workspace path instead of `.venv/Scripts`, with a legacy read fallback.
 - Added future roadmap note for optional KiCad CLI SVG-based symbol and footprint preview.
